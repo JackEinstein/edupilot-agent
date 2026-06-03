@@ -1,5 +1,7 @@
 import streamlit as st
 
+from src.planner import generate_learning_plan
+
 st.set_page_config(
     page_title="EduPilot Agent",
     page_icon="🎓",
@@ -18,23 +20,13 @@ with st.sidebar:
 st.subheader("Today's Learning Plan")
 
 if st.button("Generate Plan"):
-    st.markdown(f"""
-### Goal
-{goal}
-
-### Current Level
-{level}
-
-### Available Time
-{hours} hours
-
-### Suggested Plan
-1. Review the core concept of AI Agent workflow.
-2. Build the minimum Streamlit interface.
-3. Implement a simple planning module.
-4. Save today's progress and blockers.
-5. Prepare for tomorrow's RAG module.
-""")
+    with st.spinner("EduPilot is generating your plan..."):
+        try:
+            plan = generate_learning_plan(goal, level, hours)
+            st.markdown(plan)
+        except Exception as e:
+            st.error("Failed to generate plan.")
+            st.exception(e)
 
 st.subheader("Ask EduPilot")
 
@@ -43,4 +35,4 @@ question = st.text_input("Ask a question about your AI learning project:")
 if question:
     st.write("EduPilot:")
     st.write(f"You asked: {question}")
-    st.write("This is the minimum demo. Next we will connect it with LangGraph and RAG.")
+    st.write("Next we will connect this Q&A module with LangGraph and RAG.")
