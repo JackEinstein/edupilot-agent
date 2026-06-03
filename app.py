@@ -1,6 +1,7 @@
 import streamlit as st
 
-from src.planner import generate_learning_plan
+from src.graph import run_graph
+
 
 st.set_page_config(
     page_title="EduPilot Agent",
@@ -22,7 +23,7 @@ st.subheader("Today's Learning Plan")
 if st.button("Generate Plan"):
     with st.spinner("EduPilot is generating your plan..."):
         try:
-            plan = generate_learning_plan(goal, level, hours)
+            plan = run_graph(goal, level, hours)
             st.markdown(plan)
         except Exception as e:
             st.error("Failed to generate plan.")

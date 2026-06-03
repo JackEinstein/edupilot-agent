@@ -17,6 +17,7 @@ def get_llm():
         temperature=0.4
     )
 
+
 def generate_learning_plan(goal, level, hours):
     """Generate a personalized daily learning plan."""
     llm = get_llm()
