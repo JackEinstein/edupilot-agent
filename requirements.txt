@@ -1,4 +1,5 @@
 streamlit
+Watchdog
 langchain
 langgraph
 langchain-openai
