@@ -6,3 +6,4 @@ storage/chroma/
 .DS_Store
 .idea/
 .pytest_cache/
+data/chroma_db/
