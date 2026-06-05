@@ -1,4 +1,6 @@
 import streamlit as st
+
+from src.retriever import save_uploaded_files, rebuild_vectorstore
 from src.graph import run_graph
 
 
@@ -55,6 +57,37 @@ with st.sidebar:
         """,
         language="text",
     )
+
+    st.header("📚 知识库管理")
+
+    uploaded_files = st.file_uploader(
+        "上传学习资料（支持 .md / .txt）",
+        type=["md", "txt"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        if st.button("保存上传资料"):
+            saved_files = save_uploaded_files(uploaded_files)
+
+            if saved_files:
+                st.success(f"已保存 {len(saved_files)} 个文件：")
+                for filename in saved_files:
+                    st.write(f"- {filename}")
+            else:
+                st.warning("没有保存成功的文件，请检查文件类型。")
+
+    if st.button("重新构建知识库"):
+        with st.spinner("正在重新构建 Chroma 知识库..."):
+            result = rebuild_vectorstore()
+
+        if result["success"]:
+            st.success(
+                f'{result["message"]}，切片数：{result["chunk_count"]}'
+            )
+        else:
+            st.warning("知识库构建失败！")
+
 
 
 goal = st.text_area(

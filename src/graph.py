@@ -2,7 +2,7 @@ from typing import TypedDict
 
 from langgraph.graph import StateGraph, END, START
 
-from src.retriever import retrieve_context
+from src.retriever import format_retrieved_chunks
 from src.reviewer import generate_review
 from src.planner import generate_learning_plan
 from src.tutor import generate_tutor_explanation
@@ -23,7 +23,7 @@ def retriever_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that retrieve knowledge from vectorstore
     """
 
-    retrieve = retrieve_context(
+    retrieve = format_retrieved_chunks(
         query=state['goal'],
         k=3
     )
