@@ -30,9 +30,10 @@ def save_uploaded_files(uploaded_files):
     保存用户上传的文件，写入知识库路径
     """
 
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     saved_files = []
     for file in uploaded_files:
-        filename = file.name
+        filename = Path(file.name).name
         suffix = Path(filename).suffix.lower()
 
         if suffix not in SUPPORTED_SUFFIX:
@@ -51,15 +52,18 @@ def load_documents():
     加载knowledge文件夹中的文件
     """
 
+    if not KNOWLEDGE_DIR.exists():
+        return []
+
     documents = []
     for path in KNOWLEDGE_DIR.iterdir():
         if not path.is_file():
             continue
 
-        if Path(path).suffix not in SUPPORTED_SUFFIX:
+        if Path(path).suffix.lower() not in SUPPORTED_SUFFIX:
             continue
 
-        content = Path(path).read_text()
+        content = Path(path).read_text(encoding='utf-8')
         if not content:
             continue
 
@@ -116,13 +120,20 @@ def rebuild_vectorstore():
     """
 
     chunks = split_documents()
-    embedding_model = get_embedding_model()
+
+    if not chunks:
+        return {
+            'success': False,
+            'message': '没有可构建的知识库文件',
+            'chunk_count': 0,
+        }
 
     if CHROMA_DIR.exists():
         shutil.rmtree(CHROMA_DIR)
 
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
+    embedding_model = get_embedding_model()
     Chroma.from_documents(
         documents=chunks,
         embedding=embedding_model,
@@ -141,6 +152,9 @@ def search_knowledge(query, k):
     """
     根据用户的提问，检索向量数据库中最相似的k个的chunks
     """
+
+    if not CHROMA_DIR.exists():
+        return []
 
     vectorstore = Chroma(
         collection_name='edupilot_knowledge',
@@ -171,6 +185,8 @@ def format_retrieved_chunks(query, k):
     """
 
     results = search_knowledge(query, k)
+    if not results:
+        return '暂无可用的知识库检索结果，请先上传资料并重新构建知识库。'
 
     contexts = []
     for i, result in enumerate(results, start=1):
@@ -178,9 +194,9 @@ def format_retrieved_chunks(query, k):
             f"""资料（{i}）
             来源：{result['source']}
             chunk编号：{result['chunk_id']}
+            检索距离：{result['score']}
             内容：{result['content']}
             """
         )
 
     return '\n\n'.join(contexts)
-

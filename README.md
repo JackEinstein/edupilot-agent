@@ -55,6 +55,18 @@ Learning Result
 
 ```
 
+### 模块职责
+
+| 模块 | 职责 |
+| --- | --- |
+| `app.py` | Streamlit 页面入口，负责用户输入、文件上传、知识库重建和结果展示。 |
+| `src/graph.py` | LangGraph 工作流编排，按 `Retriever -> Planner -> Tutor -> Reviewer` 顺序运行。 |
+| `src/retriever.py` | 处理知识库文件保存、文档加载、文本切分、Chroma 构建和相似度检索。 |
+| `src/planner.py` | 基于学习目标、用户基础和可用时间生成学习计划。 |
+| `src/tutor.py` | 结合学习计划和 RAG 检索结果生成导师讲解。 |
+| `src/reviewer.py` | 生成复盘问题、实践任务和验收标准。 |
+| `src/llm.py` | 统一创建 DeepSeek Chat 模型实例并读取环境变量。 |
+
 ---
 
 ## 工作流程
@@ -151,10 +163,13 @@ edupilot-agent/
 │
 ├── src/
 │   ├── graph.py
+│   ├── llm.py
 │   ├── planner.py
+│   ├── reviewer.py
 │   ├── tutor.py
 │   └── retriever.py
 │
+├── .env.example
 ├── requirements.txt
 │
 └── README.md
@@ -250,7 +265,14 @@ pip install -r requirements.txt
 
 ```
 
-配置：
+可以从示例文件复制：
+
+```bash
+cp .env.example .env
+
+```
+
+然后配置：
 
 ```env
 API_KEY=your_api_key
@@ -258,7 +280,24 @@ BASE_URL=your_api_base
 
 ```
 
-### 5. 启动项目
+代码同时兼容以下变量名：
+
+```env
+DEEPSEEK_API_KEY=your_api_key
+DEEPSEEK_BASE_URL=your_api_base
+
+```
+
+### 5. 首次构建知识库
+
+项目使用本地 Chroma 向量库。首次运行或上传新资料后，需要在侧边栏点击：
+
+```text
+重新构建知识库
+
+```
+
+### 6. 启动项目
 
 ```bash
 streamlit run app.py
