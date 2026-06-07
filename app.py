@@ -1,3 +1,5 @@
+import uuid
+
 import streamlit as st
 
 from src.retriever import save_uploaded_files, rebuild_vectorstore
@@ -11,24 +13,28 @@ st.set_page_config(
 )
 
 
+if "thread_id" not in st.session_state:         # 初始化学习会话ID
+    st.session_state.thread_id = str(uuid.uuid4())
+
+
 st.title("🎓 EduPilot Agent")
 st.caption("一个面向个性化学习计划、导师讲解与复盘验收的 AI 学习助手")
 
 st.markdown(
     """
-EduPilot Agent 当前版本支持：
-
-1. 根据学习目标生成今日学习计划；
-2. 从本地知识库检索相关学习资料；
-3. 根据学习计划和参考资料生成导师讲解；
-4. 根据学习内容生成复盘问题与验收标准；
-5. 使用 LangGraph 串联 Retriever、Planner、Tutor、Reviewer 多节点工作流。
+    EduPilot Agent 当前版本支持：
+    
+    1. 根据学习目标生成今日学习计划；
+    2. 从本地知识库检索相关学习资料；
+    3. 根据学习计划和参考资料生成导师讲解；
+    4. 根据学习内容生成复盘问题与验收标准；
+    5. 使用 LangGraph 串联 Retriever、Planner、Tutor、Reviewer 多节点工作流。
 """
 )
 
 
 with st.sidebar:
-    st.header("学习参数设置")
+    st.header("学习参数设置")         # 学习参数设置板块
 
     level = st.selectbox(
         "你的当前基础",
@@ -43,6 +49,7 @@ with st.sidebar:
         value=4,
         step=1,
     )
+
 
     st.markdown("---")
     st.markdown("### 当前工作流")
@@ -61,7 +68,8 @@ with st.sidebar:
         language="text",
     )
 
-    st.header("📚 知识库管理")
+
+    st.header("📚 知识库管理")            # 知识库管理板块
 
     uploaded_files = st.file_uploader(
         "上传学习资料（支持 .md / .txt）",
@@ -92,12 +100,21 @@ with st.sidebar:
             st.warning(result["message"])
 
 
+    st.markdown("---")          # 学习会话记忆板块
+    st.markdown("### 🧠 学习会话记忆")
+    st.caption(f"当前会话 ID：{st.session_state.thread_id[:8]}...")
+
+    if st.button("开启新学习会话"):
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.rerun()
+
 
 goal = st.text_area(
     "请输入你的学习目标",
     value="Build an AI Agent project before June 10",
     height=120,
 )
+
 
 run_button = st.button("生成学习方案", type="primary")
 
@@ -112,6 +129,7 @@ if run_button:
                     goal=goal,
                     level=level,
                     hours=hours,
+                    thread_id=st.session_state.thread_id,
                 )
             except RuntimeError as exc:
                 st.error(str(exc))
