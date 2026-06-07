@@ -15,7 +15,7 @@ class EduPilotState(TypedDict):
     retrieved_context: str
     learning_plan: str
     tutor_explanation: str
-    review:str
+    review: str
 
 
 def retriever_node(state: EduPilotState) -> EduPilotState:
@@ -121,7 +121,7 @@ def run_graph(goal, level, hours):
         'goal': goal,
         'level': level,
         'hours': hours,
-        'retriever': '',
+        'retrieved_context': '',
         'learning_plan': '',
         'tutor_explanation': '',
         'review': '',

@@ -19,9 +19,10 @@ st.markdown(
 EduPilot Agent 当前版本支持：
 
 1. 根据学习目标生成今日学习计划；
-2. 根据学习计划生成导师讲解；
-3. 根据学习内容生成复盘问题与验收标准；
-4. 使用 LangGraph 串联 Planner、Tutor、Reviewer 多节点工作流。
+2. 从本地知识库检索相关学习资料；
+3. 根据学习计划和参考资料生成导师讲解；
+4. 根据学习内容生成复盘问题与验收标准；
+5. 使用 LangGraph 串联 Retriever、Planner、Tutor、Reviewer 多节点工作流。
 """
 )
 
@@ -48,6 +49,8 @@ with st.sidebar:
     st.code(
         """
         User Input
+           ↓
+        Retriever
            ↓
         Planner
            ↓
@@ -86,7 +89,7 @@ with st.sidebar:
                 f'{result["message"]}，切片数：{result["chunk_count"]}'
             )
         else:
-            st.warning("知识库构建失败！")
+            st.warning(result["message"])
 
 
 
@@ -104,11 +107,15 @@ if run_button:
         st.warning("请先输入学习目标。")
     else:
         with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解和复盘验收..."):
-            result = run_graph(
-                goal=goal,
-                level=level,
-                hours=hours,
-            )
+            try:
+                result = run_graph(
+                    goal=goal,
+                    level=level,
+                    hours=hours,
+                )
+            except RuntimeError as exc:
+                st.error(str(exc))
+                st.stop()
 
         st.success("生成完成！")
 
