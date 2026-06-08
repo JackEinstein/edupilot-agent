@@ -5,6 +5,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 
+from src.quiz import generate_quiz
 from src.history import format_history
 from src.retriever import format_retrieved_chunks
 from src.reviewer import generate_review
@@ -19,6 +20,7 @@ class EduPilotState(TypedDict):
     retrieved_context: str
     learning_plan: str
     tutor_explanation: str
+    quiz: str
     review: str
     messages: Annotated[list[AnyMessage], add_messages]
 
@@ -77,6 +79,26 @@ def tutor_node(state: EduPilotState) -> EduPilotState:
     }
 
 
+def quiz_node(state: EduPilotState) -> EduPilotState:
+    """
+    A node in LangGraph that generate today's quiz and correct student's answer
+    """
+
+    # history = format_history(state.get('messages', [])[:-1])
+
+    quiz = generate_quiz(
+        goal=state['goal'],
+        level=state['level'],
+        learning_plan=state['learning_plan'],
+        tutor_explanation=state['tutor_explanation'],
+        retrieved_context=state['retrieved_context'],
+    )
+
+    return {
+        'quiz': quiz,
+    }
+
+
 def reviewer_node(state: EduPilotState) -> EduPilotState:
     """
     A node in LangGraph that review knowledge in the past
@@ -95,7 +117,14 @@ def reviewer_node(state: EduPilotState) -> EduPilotState:
 
     return {
         'review': review,
-        'messages': [AIMessage(content=review)],
+        'messages': [
+            AIMessage(
+                content=f"""
+                本轮复盘：{review}
+                本轮小测：{state['quiz']}
+                """
+                )
+        ],
     }
 
 
@@ -112,12 +141,14 @@ def build_graph():
     graph.add_node('retriever', retriever_node)
     graph.add_node('planner', planner_node)
     graph.add_node('tutor', tutor_node)
+    graph.add_node('quiz', quiz_node)
     graph.add_node('reviewer', reviewer_node)
 
     graph.add_edge(START, 'retriever')
     graph.add_edge('retriever', 'planner')
     graph.add_edge('planner', 'tutor')
-    graph.add_edge('tutor', 'reviewer')
+    graph.add_edge('tutor', 'quiz')
+    graph.add_edge('quiz', 'reviewer')
     graph.add_edge('reviewer', END)
 
     return graph.compile(checkpointer=checkpointer)
@@ -144,6 +175,7 @@ def run_graph(goal, level, hours, thread_id='default'):
         'retrieved_context': '',
         'learning_plan': '',
         'tutor_explanation': '',
+        'quiz': '',
         'review': '',
         'messages': [HumanMessage(content=user_message)],
     }

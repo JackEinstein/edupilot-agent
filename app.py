@@ -2,6 +2,7 @@ import uuid
 
 import streamlit as st
 
+from src.quiz import grade_quiz
 from src.retriever import save_uploaded_files, rebuild_vectorstore
 from src.graph import run_graph
 
@@ -16,6 +17,12 @@ st.set_page_config(
 if "thread_id" not in st.session_state:         # 初始化学习会话ID
     st.session_state.thread_id = str(uuid.uuid4())
 
+if "latest_result" not in st.session_state:
+    st.session_state.latest_result = None
+
+if "quiz_feedback" not in st.session_state:
+    st.session_state.quiz_feedback = ""
+
 
 st.title("🎓 EduPilot Agent")
 st.caption("一个面向个性化学习计划、导师讲解与复盘验收的 AI 学习助手")
@@ -27,8 +34,10 @@ st.markdown(
     1. 根据学习目标生成今日学习计划；
     2. 从本地知识库检索相关学习资料；
     3. 根据学习计划和参考资料生成导师讲解；
-    4. 根据学习内容生成复盘问题与验收标准；
-    5. 使用 LangGraph 串联 Retriever、Planner、Tutor、Reviewer 多节点工作流。
+    4. 自动生成本轮小测验；
+    5. 支持用户作答并生成智能批改反馈；
+    6. 根据学习内容生成复盘问题与验收标准；
+    7. 使用 LangGraph 串联 Retriever、Planner、Tutor、Quiz、Reviewer 多节点工作流。
 """
 )
 
@@ -56,19 +65,22 @@ with st.sidebar:
     st.code(
         """
         User Input
-           ↓
+            ↓
         Retriever
-           ↓
+            ↓
         Planner
-           ↓
+            ↓
         Tutor
-           ↓
+            ↓
+        Quiz
+            ↓
         Reviewer
         """,
         language="text",
     )
 
 
+    st.markdown("---")
     st.header("📚 知识库管理")            # 知识库管理板块
 
     uploaded_files = st.file_uploader(
@@ -123,7 +135,7 @@ if run_button:
     if not goal.strip():
         st.warning("请先输入学习目标。")
     else:
-        with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解和复盘验收..."):
+        with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验和复盘验收..."):
             try:
                 result = run_graph(
                     goal=goal,
@@ -135,27 +147,66 @@ if run_button:
                 st.error(str(exc))
                 st.stop()
 
+        st.session_state.latest_result = result
+        st.session_state.quiz_feedback = ""
+
         st.success("生成完成！")
 
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["📅 学习计划", "🧑‍🏫 导师讲解", "✅ 复盘验收", "📚 检索资料"]
+
+result = st.session_state.latest_result
+
+if result:
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["📅 学习计划", "🧑‍🏫 导师讲解", "📝 小测验", "✅ 复盘验收", "📚 检索资料"]
+    )
+
+    with tab1:
+        st.subheader("📅 今日学习计划")
+        st.markdown(result["learning_plan"])
+
+    with tab2:
+        st.subheader("🧑‍🏫 导师讲解")
+        st.markdown(result["tutor_explanation"])
+
+    with tab3:
+        st.subheader("📝 本轮小测验")
+        st.markdown(result["quiz"])
+
+        student_answer = st.text_area(
+            "请在这里作答",
+            height=220,
+            placeholder="请按 1、2、3 的顺序作答，例如：\n1. ...\n2. ...\n3. ...",
+            key="student_answer",
         )
 
-        with tab1:
-            st.subheader("📅 今日学习计划")
-            st.markdown(result["learning_plan"])
+        if st.button("提交答案并批改"):
+            if not student_answer.strip():
+                st.warning("请先填写你的答案。")
+            else:
+                with st.spinner("EduPilot Agent 正在批改你的答案..."):
+                    feedback = grade_quiz(
+                        goal=goal,
+                        level=level,
+                        quiz=result["quiz"],
+                        student_answer=student_answer,
+                        tutor_explanation=result["tutor_explanation"],
+                    )
 
-        with tab2:
-            st.subheader("🧑‍🏫 导师讲解")
-            st.markdown(result["tutor_explanation"])
+                st.session_state.quiz_feedback = feedback
+                st.success("批改完成！")
 
-        with tab3:
-            st.subheader("✅ 复盘与验收")
-            st.markdown(result["review"])
+        if st.session_state.quiz_feedback:
+            st.markdown("---")
+            st.subheader("✅ Quiz 批改反馈")
+            st.markdown(st.session_state.quiz_feedback)
 
-        with tab4:
-            st.subheader("📚 RAG 检索到的参考资料")
-            st.markdown(result["retrieved_context"])
+    with tab4:
+        st.subheader("✅ 复盘与验收")
+        st.markdown(result["review"])
 
-        with st.expander("查看原始 State 数据"):
-            st.json(result)
+    with tab5:
+        st.subheader("📚 RAG 检索到的参考资料")
+        st.markdown(result["retrieved_context"])
+
+    with st.expander("查看原始 State 数据"):
+        st.write(result)
