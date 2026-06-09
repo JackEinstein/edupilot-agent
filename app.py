@@ -2,6 +2,7 @@ import uuid
 
 import streamlit as st
 
+from src.qa import answer_followup_question
 from src.quiz import grade_quiz
 from src.retriever import save_uploaded_files, rebuild_vectorstore
 from src.graph import run_graph
@@ -23,6 +24,9 @@ if "latest_result" not in st.session_state:
 if "quiz_feedback" not in st.session_state:
     st.session_state.quiz_feedback = ""
 
+if "qa_history" not in st.session_state:
+    st.session_state.qa_history = []
+
 
 st.title("🎓 EduPilot Agent")
 st.caption("一个面向个性化学习计划、导师讲解与复盘验收的 AI 学习助手")
@@ -36,8 +40,9 @@ st.markdown(
     3. 根据学习计划和参考资料生成导师讲解；
     4. 自动生成本轮小测验；
     5. 支持用户作答并生成智能批改反馈；
-    6. 根据学习内容生成复盘问题与验收标准；
-    7. 使用 LangGraph 串联 Retriever、Planner、Tutor、Quiz、Reviewer 多节点工作流。
+    6. 支持学生基于本轮学习内容继续追问答疑；
+    7. 根据学习内容生成复盘问题与验收标准；
+    8. 使用 LangGraph 串联 Retriever、Planner、Tutor、Quiz、Reviewer 多节点工作流。
 """
 )
 
@@ -118,6 +123,9 @@ with st.sidebar:
 
     if st.button("开启新学习会话"):
         st.session_state.thread_id = str(uuid.uuid4())
+        st.session_state.latest_result = None
+        st.session_state.quiz_feedback = ""
+        st.session_state.qa_history = []
         st.rerun()
 
 
@@ -156,8 +164,8 @@ if run_button:
 result = st.session_state.latest_result
 
 if result:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["📅 学习计划", "🧑‍🏫 导师讲解", "📝 小测验", "✅ 复盘验收", "📚 检索资料"]
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["📅 学习计划", "🧑‍🏫 导师讲解", "💬 追问答疑", "📝 小测验", "✅ 复盘验收", "📚 检索资料"]
     )
 
     with tab1:
@@ -169,6 +177,53 @@ if result:
         st.markdown(result["tutor_explanation"])
 
     with tab3:
+        st.subheader("💬 追问答疑")
+        st.caption("你可以针对今天的学习计划、导师讲解、RAG 资料继续追问。")
+
+        if not st.session_state.qa_history:
+            st.info("目前还没有追问记录。你可以在下面输入问题。")
+        else:
+            for idx, item in enumerate(st.session_state.qa_history, start=1):
+                with st.chat_message("user"):
+                    st.markdown(item["question"])
+
+                with st.chat_message("assistant"):
+                    st.markdown(item["answer"])
+
+        with st.form("followup_qa_form", clear_on_submit=True):
+            followup_question = st.text_area(
+                "请输入你的追问",
+                height=120,
+                placeholder="例如：老师，为什么 checkpointer 和 thread_id 要一起用？",
+            )
+
+            submit_followup = st.form_submit_button("提交追问")
+
+        if submit_followup:
+            if not followup_question.strip():
+                st.warning("请先输入你的追问问题。")
+            else:
+                with st.spinner("EduPilot Agent 正在结合本轮内容和知识库回答..."):
+                    answer = answer_followup_question(
+                        goal=goal,
+                        level=level,
+                        question=followup_question,
+                        learning_plan=result["learning_plan"],
+                        tutor_explanation=result["tutor_explanation"],
+                        retrieved_context=result["retrieved_context"],
+                        qa_history=st.session_state.qa_history,
+                    )
+
+                st.session_state.qa_history.append(
+                    {
+                        "question": followup_question,
+                        "answer": answer,
+                    }
+                )
+
+                st.rerun()
+
+    with tab4:
         st.subheader("📝 本轮小测验")
         st.markdown(result["quiz"])
 
@@ -200,11 +255,11 @@ if result:
             st.subheader("✅ Quiz 批改反馈")
             st.markdown(st.session_state.quiz_feedback)
 
-    with tab4:
+    with tab5:
         st.subheader("✅ 复盘与验收")
         st.markdown(result["review"])
 
-    with tab5:
+    with tab6:
         st.subheader("📚 RAG 检索到的参考资料")
         st.markdown(result["retrieved_context"])
 
