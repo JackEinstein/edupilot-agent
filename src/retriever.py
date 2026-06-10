@@ -179,7 +179,7 @@ def search_knowledge(query, k):
     return formatted_results
 
 
-def format_retrieved_chunks(query, k):
+def format_retrieved_chunks(query, k=3):
     """
     把检索到的chunks内容及其他信息整理成格式化的文本，提供给大模型参考
     """

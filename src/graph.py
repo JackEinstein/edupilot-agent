@@ -6,7 +6,7 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 
 from src.quiz import generate_quiz
-from src.history import format_history
+from src.history import format_langgraph_messages
 from src.retriever import format_retrieved_chunks
 from src.reviewer import generate_review
 from src.planner import generate_learning_plan
@@ -45,7 +45,7 @@ def planner_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that generate today's learning plan
     """
 
-    history = format_history(state.get('messages', [])[:-1])
+    history = format_langgraph_messages(state.get('messages', [])[:-1])
 
     plan = generate_learning_plan(
         goal=state['goal'],
@@ -64,7 +64,7 @@ def tutor_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that explain today's knowledge
     """
 
-    history = format_history(state.get('messages', [])[:-1])
+    history = format_langgraph_messages(state.get('messages', [])[:-1])
 
     explanation = generate_tutor_explanation(
         goal=state['goal'],
@@ -104,7 +104,7 @@ def reviewer_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that review knowledge in the past
     """
 
-    history = format_history(state.get('messages', [])[:-1])
+    history = format_langgraph_messages(state.get('messages', [])[:-1])
 
     review = generate_review(
         goal=state['goal'],

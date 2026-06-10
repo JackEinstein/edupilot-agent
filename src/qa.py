@@ -1,27 +1,6 @@
+from src.history import format_qa_history
 from src.llm import get_llm
 from src.retriever import format_retrieved_chunks
-
-
-def format_qa_history(qa_history: list[dict]) -> str:
-    """
-    将追问答疑历史转成 prompt 文本
-    """
-
-    if not qa_history:
-        return '暂无历史问答。'
-
-    qa_prompts = []
-
-    for i, item in enumerate(qa_history, start=1):
-        question = item['question']
-        answer = item['answer']
-
-        qa_prompts.append(f'学生第{i}轮追问：')
-        qa_prompts.append(f"学生问题：{question}")
-        qa_prompts.append(f"EduPilot 回答：{answer}")
-        qa_prompts.append("")
-
-    return '\n'.join(qa_prompts)
 
 
 def answer_followup_question(goal, level, learning_plan, tutor_explanation, retrieved_context, qa_history, question):
