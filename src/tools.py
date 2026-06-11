@@ -44,7 +44,7 @@ def build_tools(context: dict):
 
     def _format_current_context():
         return f"""
-            【学习目标
+            【学习目标】
             {goal}
             
             【当前基础】

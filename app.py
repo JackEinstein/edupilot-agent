@@ -9,7 +9,9 @@ from src.retriever import save_uploaded_files, rebuild_vectorstore
 from src.graph import run_graph
 
 
+# =========================
 # 页面基础配置
+# =========================
 st.set_page_config(
     page_title="EduPilot Agent",
     page_icon="🎓",
@@ -17,7 +19,11 @@ st.set_page_config(
 )
 
 
-# 初始化当前学习会话 ID，用于 Workflow / ReAct Agent 的短期记忆隔离
+# =========================
+# Session State 初始化
+# =========================
+
+# 当前学习会话 ID：用于 Workflow / ReAct Agent 的短期记忆隔离
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 
@@ -33,31 +39,39 @@ if "quiz_feedback" not in st.session_state:
 if "qa_history" not in st.session_state:
     st.session_state.qa_history = []
 
-# 保存 ReAct Agent 对话历史，包括问题、回答和工具调用轨迹
+# 保存 ReAct Agent 对话历史，包括问题、回答、草稿、Reflection 和工具调用轨迹
 if "react_agent_history" not in st.session_state:
     st.session_state.react_agent_history = []
 
 
+# =========================
+# 页面标题与说明
+# =========================
 st.title("🎓 EduPilot Agent")
-st.caption("一个面向个性化学习计划、导师讲解、测验批改与 ReAct Tool Calling 的 AI 学习助手")
+st.caption("一个面向个性化学习计划、导师讲解、测验批改、Reflection 与 ReAct Tool Calling 的 AI 学习助手")
 
 st.markdown(
     """
-    EduPilot Agent 当前版本支持：
+EduPilot Agent 当前版本支持：
 
-    1. 根据学习目标生成今日学习计划；
-    2. 从本地知识库检索相关学习资料；
-    3. 根据学习计划和参考资料生成导师讲解；
-    4. 自动生成本轮小测验；
-    5. 支持用户作答并生成智能批改反馈；
-    6. 支持学生基于本轮学习内容继续追问答疑；
-    7. 支持将 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer 封装成 tools；
-    8. 支持 Workflow Mode 和 ReAct Agent Mode 两种运行模式；
-    9. 使用 LangGraph 串联 Retriever、Planner、Tutor、Quiz、Reviewer 多节点工作流。
+1. 根据学习目标生成今日学习计划；
+2. 从本地知识库检索相关学习资料；
+3. 根据学习计划和参考资料生成导师讲解；
+4. 自动生成本轮小测验；
+5. 支持用户作答并生成智能批改反馈；
+6. 支持学生基于本轮学习内容继续追问答疑；
+7. 支持将 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer 封装成 tools；
+8. 支持 Workflow Mode 和 ReAct Agent Mode 两种运行模式；
+9. 使用 LangGraph 串联 Retriever、Planner、Tutor、Quiz、Reviewer、Workflow Reflection 多节点工作流；
+10. 支持轻量级 Workflow Reflection：Tutor / Quiz / Reviewer 节点级自检 + 全局 Workflow 自检；
+11. 支持 ReAct Agent 最终回答后的 Reflection 自检改写。
 """
 )
 
 
+# =========================
+# Sidebar：参数、模式、知识库、会话
+# =========================
 with st.sidebar:
     st.header("学习参数设置")
 
@@ -87,6 +101,13 @@ with st.sidebar:
         index=0,
     )
 
+    # Reflection 总开关：Workflow 和 ReAct 共用
+    enable_reflection = st.checkbox(
+        "启用 Reflection 反思模块",
+        value=True,
+        help="开启后，Workflow Mode 会执行轻量级节点自检和全局自检；ReAct Agent Mode 会对最终回答进行自检改写。",
+    )
+
     # 根据当前模式展示不同的执行流程
     if mode == "Workflow Mode":
         st.markdown("### 当前工作流")
@@ -98,11 +119,15 @@ Retriever
     ↓
 Planner
     ↓
-Tutor
+Tutor + Lightweight Reflection
     ↓
-Quiz
+Quiz + Lightweight Reflection
     ↓
-Reviewer
+Reviewer + Lightweight Reflection
+    ↓
+Global Workflow Reflection
+    ↓
+Final Answer
             """,
             language="text",
         )
@@ -117,6 +142,10 @@ LLM decides whether to use tools
 Tool Call: RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer
     ↓
 Tool Result
+    ↓
+Draft Answer
+    ↓
+Reflection
     ↓
 Final Answer
             """,
@@ -188,7 +217,7 @@ if mode == "Workflow Mode":
         if not goal.strip():
             st.warning("请先输入学习目标。")
         else:
-            with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验和复盘验收..."):
+            with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验、复盘验收和 Reflection 自检..."):
                 try:
                     # 调用固定 LangGraph 工作流
                     workflow_result = run_graph(
@@ -196,6 +225,7 @@ if mode == "Workflow Mode":
                         level=level,
                         hours=hours,
                         thread_id=st.session_state.thread_id,
+                        enable_reflection=enable_reflection,
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -209,17 +239,25 @@ if mode == "Workflow Mode":
     result = st.session_state.latest_result
 
     if result:
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-            ["📅 学习计划", "🧑‍🏫 导师讲解", "💬 追问答疑", "📝 小测验", "✅ 复盘验收", "📚 检索资料"]
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+            [
+                "📅 学习计划",
+                "🧑‍🏫 导师讲解",
+                "💬 追问答疑",
+                "📝 小测验",
+                "✅ 复盘验收",
+                "🧠 Reflection",
+                "📚 检索资料",
+            ]
         )
 
         with tab1:
             st.subheader("📅 今日学习计划")
-            st.markdown(result["learning_plan"])
+            st.markdown(result.get("learning_plan", ""))
 
         with tab2:
             st.subheader("🧑‍🏫 导师讲解")
-            st.markdown(result["tutor_explanation"])
+            st.markdown(result.get("tutor_explanation", ""))
 
         with tab3:
             st.subheader("💬 追问答疑")
@@ -255,9 +293,9 @@ if mode == "Workflow Mode":
                             goal=goal,
                             level=level,
                             question=followup_question,
-                            learning_plan=result["learning_plan"],
-                            tutor_explanation=result["tutor_explanation"],
-                            retrieved_context=result["retrieved_context"],
+                            learning_plan=result.get("learning_plan", ""),
+                            tutor_explanation=result.get("tutor_explanation", ""),
+                            retrieved_context=result.get("retrieved_context", ""),
                             qa_history=st.session_state.qa_history,
                         )
 
@@ -273,7 +311,7 @@ if mode == "Workflow Mode":
 
         with tab4:
             st.subheader("📝 本轮小测验")
-            st.markdown(result["quiz"])
+            st.markdown(result.get("quiz", ""))
 
             student_answer = st.text_area(
                 "请在这里作答",
@@ -291,9 +329,9 @@ if mode == "Workflow Mode":
                         feedback = grade_quiz(
                             goal=goal,
                             level=level,
-                            quiz=result["quiz"],
+                            quiz=result.get("quiz", ""),
                             student_answer=student_answer,
-                            tutor_explanation=result["tutor_explanation"],
+                            tutor_explanation=result.get("tutor_explanation", ""),
                         )
 
                     st.session_state.quiz_feedback = feedback
@@ -306,11 +344,40 @@ if mode == "Workflow Mode":
 
         with tab5:
             st.subheader("✅ 复盘与验收")
-            st.markdown(result["review"])
+            st.markdown(result.get("review", ""))
 
         with tab6:
+            st.subheader("🧠 轻量级 Workflow Reflection")
+            st.caption("这里展示 Tutor / Quiz / Reviewer 的节点级自检，以及最终 Global Workflow Reflection。")
+
+            if not enable_reflection:
+                st.info("当前关闭了 Reflection。你可以在左侧侧边栏开启。")
+
+            st.markdown("### Tutor Node Reflection")
+            tutor_reflection = result.get("tutor_reflection", "")
+            st.markdown(tutor_reflection if tutor_reflection else "未启用或暂无结果。")
+
+            st.markdown("### Quiz Node Reflection")
+            quiz_reflection = result.get("quiz_reflection", "")
+            st.markdown(quiz_reflection if quiz_reflection else "未启用或暂无结果。")
+
+            st.markdown("### Reviewer Node Reflection")
+            review_reflection = result.get("review_reflection", "")
+            st.markdown(review_reflection if review_reflection else "未启用或暂无结果。")
+
+            st.markdown("### Global Workflow Reflection")
+            workflow_reflection = result.get("workflow_reflection", "")
+            st.markdown(workflow_reflection if workflow_reflection else "未启用或暂无结果。")
+
+            with st.expander("查看 Workflow 草稿总输出"):
+                st.markdown(result.get("workflow_draft_answer", ""))
+
+            with st.expander("查看最终输出 final_answer"):
+                st.markdown(result.get("final_answer", ""))
+
+        with tab7:
             st.subheader("📚 RAG 检索到的参考资料")
-            st.markdown(result["retrieved_context"])
+            st.markdown(result.get("retrieved_context", ""))
 
         # 调试入口：查看 LangGraph State 原始结果
         with st.expander("查看原始 State 数据"):
@@ -322,7 +389,7 @@ if mode == "Workflow Mode":
 # =========================
 else:
     st.subheader("🛠️ ReAct Agent Mode")
-    st.caption("这个模式会让模型根据你的问题自主选择 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer 等工具。")
+    st.caption("这个模式会让模型根据你的问题自主选择 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer 等工具，并在最终回答后进行 Reflection 自检改写。")
 
     # 读取最近一次 Workflow 结果；没有运行过 Workflow 时为空字典
     latest_result = st.session_state.latest_result or {}
@@ -343,11 +410,11 @@ else:
 - `grade_quiz_answer_tool`：封装 Quiz 批改；
 - `qa_tool`：封装 Follow-up QA；
 - `review_tool`：封装 Reviewer 复盘验收；
-- `get_current_context_tool`：读取当前会话上下文.
+- `get_current_context_tool`：读取当前会话上下文。
         """
     )
 
-    # 展示 ReAct Agent 历史对话和工具调用轨迹
+    # 展示 ReAct Agent 历史对话、Reflection 和工具调用轨迹
     if not st.session_state.react_agent_history:
         st.info("目前还没有 ReAct Agent 对话。可以先问：老师，我今天想学习 ReAct Tool Calling，请你直接给我一份学习计划和小测验。")
     else:
@@ -356,19 +423,28 @@ else:
                 st.markdown(item["question"])
 
             with st.chat_message("assistant"):
-                st.markdown(item["answer"])
+                st.markdown(item["final_answer"])
+
+            # 展示本轮 Reflection，便于调试和项目演示
+            if item.get("used_reflection") or item.get("reflection") or item.get("draft_answer"):
+                with st.expander("查看本轮 Reflection 自检过程"):
+                    st.markdown("### ReAct 草稿回答")
+                    st.markdown(item.get("draft_answer", "暂无草稿记录。"))
+
+                    st.markdown("### Reflection 审查意见")
+                    st.markdown(item.get("reflection", "暂无 Reflection 记录。"))
 
             # 展示本轮工具调用 trace，便于调试和项目演示
             if item.get("trace"):
                 with st.expander("查看本轮工具调用过程"):
                     for step in item["trace"]:
-                        if step["type"] == "tool_call":
-                            st.markdown(f"**调用工具：`{step['name']}`**")
-                            st.code(step["content"], language="text")
+                        if step.get("type") == "tool_call":
+                            st.markdown(f"**调用工具：`{step.get('name', '')}`**")
+                            st.code(step.get("content", ""), language="text")
 
-                        elif step["type"] == "tool_result":
-                            st.markdown(f"**工具返回：`{step['name']}`**")
-                            st.code(step["content"], language="text")
+                        elif step.get("type") == "tool_result":
+                            st.markdown(f"**工具返回：`{step.get('name', '')}`**")
+                            st.code(step.get("content", ""), language="text")
 
     # ReAct Agent 输入表单：用户自由提问，由模型决定是否调用工具
     with st.form("react_agent_form", clear_on_submit=True):
@@ -395,17 +471,20 @@ else:
                 "quiz": latest_result.get("quiz", ""),
                 "review": latest_result.get("review", ""),
                 "retrieved_context": latest_result.get("retrieved_context", ""),
+                "workflow_reflection": latest_result.get("workflow_reflection", ""),
+                "final_answer": latest_result.get("final_answer", ""),
                 "qa_history": st.session_state.qa_history,
                 "react_agent_history": st.session_state.react_agent_history,
             }
 
             with st.spinner("ReAct Agent 正在判断是否需要调用工具，并生成回答..."):
                 try:
-                    # 调用 ReAct Agent，返回最终回答和工具调用轨迹
+                    # 调用 ReAct Agent，返回最终回答、草稿、Reflection 和工具调用轨迹
                     react_result = run_react_agent(
                         question=react_question,
                         context=current_context,
                         thread_id=st.session_state.thread_id,
+                        enable_reflection=enable_reflection,
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -415,8 +494,11 @@ else:
             st.session_state.react_agent_history.append(
                 {
                     "question": react_question,
-                    "answer": react_result["answer"],
-                    "trace": react_result["trace"],
+                    "final_answer": react_result.get("final_answer", ""),
+                    "draft_answer": react_result.get("draft_answer", ""),
+                    "reflection": react_result.get("reflection", ""),
+                    "used_reflection": react_result.get("used_reflection", False),
+                    "trace": react_result.get("trace", []),
                 }
             )
 

@@ -2,6 +2,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AnyMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+from src.reflection import run_reflection_loop
 from src.llm import get_llm
 from src.tools import build_tools
 
@@ -79,14 +80,14 @@ def extract_tool_trace(messages: list[AnyMessage]) -> list[dict]:
                 {
                     'type': 'tool_result',
                     'name': getattr(msg, 'name', 'unknown_tool'),
-                    'content': str(getattr(msg, 'content', '')),
+                    'content': str(getattr(msg, 'content', ''))[:1500],
                 }
             )
 
     return trace
 
 
-def run_react_agent(context: dict, question: str, thread_id: str = 'default') -> dict:
+def run_react_agent(context: dict, question: str, thread_id: str = 'default', enable_reflection: bool = True) -> dict:
     """
     Run EduPilot ReAct-style Tool Calling Agent.
     """
@@ -117,10 +118,24 @@ def run_react_agent(context: dict, question: str, thread_id: str = 'default') ->
     )
 
     messages = result.get('messages', [])
+    draft_answer = str(getattr(messages[-1], 'content', '')) if messages else ''
+
+    trace = extract_tool_trace(messages)
+
+    reflection_result = run_reflection_loop(
+        context=context,
+        question=question,
+        draft_answer=draft_answer,
+        trace=trace,
+        enable_reflection=enable_reflection,
+    )
 
     return {
-        'answer': str(getattr(messages[-1], 'content', '')),
-        'trace': extract_tool_trace(messages)
+        'draft_answer': reflection_result['draft_answer'],
+        'final_answer': reflection_result['final_answer'],
+        'reflection': reflection_result['reflection'],
+        'used_reflection': reflection_result['used_reflection'],
+        'trace': trace
     }
 
 

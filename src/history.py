@@ -54,7 +54,7 @@ def format_react_agent_history(react_agent_history: list[dict], max_rounds=10) -
 
     for i, item in enumerate(recent_history, start=1):
         question = item['question']
-        answer = item['answer']
+        answer = item['final_answer']
 
         lines.append(f"第{i}轮 ReAct Agent 对话：")
         lines.append(f"学生提问：{question}")

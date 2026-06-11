@@ -5,6 +5,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 
+from src.reflection import reflect_node_output, reflect_workflow_output
 from src.quiz import generate_quiz
 from src.history import format_langgraph_messages
 from src.retriever import format_retrieved_chunks
@@ -13,16 +14,82 @@ from src.planner import generate_learning_plan
 from src.tutor import generate_tutor_explanation
 
 
-class EduPilotState(TypedDict):
+class EduPilotState(TypedDict, total=False):
     goal: str
     level: str
     hours: int
+    enable_reflection: bool
+
     retrieved_context: str
+
     learning_plan: str
+
     tutor_explanation: str
+    tutor_reflection: str
+
     quiz: str
+    quiz_reflection: str
+
     review: str
+    review_reflection: str
+
+    workflow_draft_answer: str
+    workflow_reflection: str
+    final_answer: str
+
     messages: Annotated[list[AnyMessage], add_messages]
+
+
+def _build_light_reflection_context(state: EduPilotState, stage: str, history: str = "") -> dict:
+    """
+    为不同节点构造最小必要上下文。
+
+    原则：
+    - 不传整个 state；
+    - 只传判断当前节点质量所需的信息；
+    - 减少 token 成本和上下文噪声。
+    """
+
+    base_context = {
+        "学习目标": state.get("goal", ""),
+        "学生水平": state.get("level", ""),
+    }
+
+    if stage == "tutor":
+        return {
+            **base_context,
+            "今日学习计划": state.get("learning_plan", ""),
+            "RAG 检索资料": state.get("retrieved_context", ""),
+            "历史对话": history,
+        }
+
+    if stage == "quiz":
+        return {
+            **base_context,
+            "今日学习计划": state.get("learning_plan", ""),
+            "导师讲解": state.get("tutor_explanation", ""),
+        }
+
+    if stage == "reviewer":
+        return {
+            **base_context,
+            "今日学习计划": state.get("learning_plan", ""),
+            "导师讲解": state.get("tutor_explanation", ""),
+            "本轮小测验": state.get("quiz", ""),
+            "历史对话": history,
+        }
+
+    if stage == "global":
+        return {
+            **base_context,
+            "学习时间": f'{state.get("hours", "")} 小时',
+            "今日学习计划": state.get("learning_plan", ""),
+            "导师讲解": state.get("tutor_explanation", ""),
+            "本轮小测验": state.get("quiz", ""),
+            "复盘验收": state.get("review", ""),
+        }
+
+    return base_context
 
 
 def retriever_node(state: EduPilotState) -> EduPilotState:
@@ -74,8 +141,20 @@ def tutor_node(state: EduPilotState) -> EduPilotState:
         history=history,
     )
 
+    tutor_reflection = reflect_node_output(
+        stage='tutor',
+        context=_build_light_reflection_context(
+            state=state,
+            stage='tutor',
+            history=history,
+        ),
+        draft_output=explanation,
+        enable_reflection=state.get('enable_reflection', True),
+    )
+
     return {
-        'tutor_explanation': explanation,
+        'tutor_explanation': tutor_reflection['improved_output'],
+        'tutor_reflection': tutor_reflection['reflection'],
     }
 
 
@@ -84,7 +163,7 @@ def quiz_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that generate today's quiz and correct student's answer
     """
 
-    # history = format_history(state.get('messages', [])[:-1])
+    history = format_langgraph_messages(state.get('messages', [])[:-1])
 
     quiz = generate_quiz(
         goal=state['goal'],
@@ -94,8 +173,20 @@ def quiz_node(state: EduPilotState) -> EduPilotState:
         retrieved_context=state['retrieved_context'],
     )
 
+    quiz_reflection = reflect_node_output(
+        stage='quiz',
+        context=_build_light_reflection_context(
+            state=state,
+            stage='quiz',
+            history=history,
+        ),
+        draft_output=quiz,
+        enable_reflection=state.get('enable_reflection', True),
+    )
+
     return {
-        'quiz': quiz,
+        'quiz': quiz_reflection['improved_output'],
+        'quiz_reflection': quiz_reflection['reflection'],
     }
 
 
@@ -115,16 +206,70 @@ def reviewer_node(state: EduPilotState) -> EduPilotState:
         history=history,
     )
 
+    review_reflection = reflect_node_output(
+        stage='review',
+        context=_build_light_reflection_context(
+            state=state,
+            stage='reviewer',
+            history=history,
+        ),
+        draft_output=review,
+        enable_reflection=state.get('enable_reflection', True),
+    )
+
+    workflow_draft_answer = f"""
+# EduPilot Workflow 学习方案
+
+## 【今日计划】
+
+{state['learning_plan']}
+
+## 【导师讲解】
+
+{state['tutor_explanation']}
+
+## 【小测验收】
+
+{state['quiz']}
+
+## 【复盘与总结】
+
+{review_reflection['improved_output']}
+"""
+
     return {
-        'review': review,
+        'review': review_reflection['improved_output'],
+        'review_reflection': review_reflection['reflection'],
+        'workflow_draft_answer': workflow_draft_answer,
+    }
+
+
+def reflection_node(state: EduPilotState) -> EduPilotState:
+    """
+    Final lightweight global Reflection node.
+
+    It checks the whole workflow output and writes final AIMessage
+    into LangGraph memory.
+    """
+
+    history = format_langgraph_messages(state.get('messages', [])[:-1])
+
+    final_reflection = reflect_workflow_output(
+        context=_build_light_reflection_context(
+            state=state,
+            stage='global',
+            history=history,
+        ),
+        draft_answer=state['workflow_draft_answer'],
+        enable_reflection=state.get('enable_reflection', True),
+    )
+
+    return {
+        'final_answer': final_reflection['final_answer'],
+        'workflow_reflection': final_reflection['reflection'],
         'messages': [
-            AIMessage(
-                content=f"""
-                本轮复盘：{review}
-                本轮小测：{state['quiz']}
-                """
-                )
-        ],
+            AIMessage(content=final_reflection['final_answer'])
+        ]
     }
 
 
@@ -143,13 +288,15 @@ def build_graph():
     graph.add_node('tutor', tutor_node)
     graph.add_node('quiz', quiz_node)
     graph.add_node('reviewer', reviewer_node)
+    graph.add_node('reflection', reflection_node)
 
     graph.add_edge(START, 'retriever')
     graph.add_edge('retriever', 'planner')
     graph.add_edge('planner', 'tutor')
     graph.add_edge('tutor', 'quiz')
     graph.add_edge('quiz', 'reviewer')
-    graph.add_edge('reviewer', END)
+    graph.add_edge('reviewer', 'reflection')
+    graph.add_edge('reflection', END)
 
     return graph.compile(checkpointer=checkpointer)
 
@@ -157,7 +304,7 @@ def build_graph():
 edupilot_graph = build_graph()
 
 
-def run_graph(goal, level, hours, thread_id='default'):
+def run_graph(goal, level, hours, thread_id='default', enable_reflection=True):
     """
     Run LangGraph Workflow
     """
@@ -172,11 +319,25 @@ def run_graph(goal, level, hours, thread_id='default'):
         'goal': goal,
         'level': level,
         'hours': hours,
+        'enable_reflection': enable_reflection,
+
         'retrieved_context': '',
+
         'learning_plan': '',
+
         'tutor_explanation': '',
+        'tutor_reflection': '',
+
         'quiz': '',
+        'quiz_reflection': '',
+
         'review': '',
+        'review_reflection': '',
+
+        'workflow_draft': '',
+        'workflow_reflection': '',
+        'final_answer': '',
+
         'messages': [HumanMessage(content=user_message)],
     }
 
