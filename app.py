@@ -2,11 +2,13 @@ import uuid
 
 import streamlit as st
 
+from src.graph import run_graph
+from src.long_term_memory import clear_long_term_memory, record_react_memory
 from src.qa import answer_followup_question
 from src.quiz import grade_quiz
 from src.react_agent import run_react_agent
 from src.retriever import save_uploaded_files, rebuild_vectorstore
-from src.graph import run_graph
+from src.vector_memory import apply_forgetting_policy, get_memory_stats
 
 
 # =========================
@@ -39,16 +41,20 @@ if "quiz_feedback" not in st.session_state:
 if "qa_history" not in st.session_state:
     st.session_state.qa_history = []
 
-# 保存 ReAct Agent 对话历史，包括问题、回答、草稿、Reflection 和工具调用轨迹
+# 保存 ReAct Agent 对话历史，包括问题、回答、草稿、Reflection、工具调用轨迹和长期记忆写入结果
 if "react_agent_history" not in st.session_state:
     st.session_state.react_agent_history = []
+
+# 保存手动执行遗忘机制的结果，方便在侧边栏展示
+if "forgetting_result" not in st.session_state:
+    st.session_state.forgetting_result = None
 
 
 # =========================
 # 页面标题与说明
 # =========================
 st.title("🎓 EduPilot Agent")
-st.caption("一个面向个性化学习计划、导师讲解、测验批改、Reflection 与 ReAct Tool Calling 的 AI 学习助手")
+st.caption("一个面向个性化学习计划、导师讲解、测验批改、Reflection、ReAct Tool Calling 与长期记忆的 AI 学习助手")
 
 st.markdown(
     """
@@ -60,17 +66,18 @@ EduPilot Agent 当前版本支持：
 4. 自动生成本轮小测验；
 5. 支持用户作答并生成智能批改反馈；
 6. 支持学生基于本轮学习内容继续追问答疑；
-7. 支持将 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer 封装成 tools；
+7. 支持将 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer / Long-term Memory 封装成 tools；
 8. 支持 Workflow Mode 和 ReAct Agent Mode 两种运行模式；
 9. 使用 LangGraph 串联 Retriever、Planner、Tutor、Quiz、Reviewer、Workflow Reflection 多节点工作流；
 10. 支持轻量级 Workflow Reflection：Tutor / Quiz / Reviewer 节点级自检 + 全局 Workflow 自检；
-11. 支持 ReAct Agent 最终回答后的 Reflection 自检改写。
+11. 支持 ReAct Agent 最终回答后的 Reflection 自检改写；
+12. 支持基于 Chroma 的向量数据库长期记忆，并提供轻量级遗忘机制。
 """
 )
 
 
 # =========================
-# Sidebar：参数、模式、知识库、会话
+# Sidebar：参数、模式、知识库、会话、长期记忆
 # =========================
 with st.sidebar:
     st.header("学习参数设置")
@@ -115,7 +122,7 @@ with st.sidebar:
             """
 User Input
     ↓
-Retriever
+Retriever: RAG + Long-term Memory
     ↓
 Planner
     ↓
@@ -126,6 +133,8 @@ Quiz + Lightweight Reflection
 Reviewer + Lightweight Reflection
     ↓
 Global Workflow Reflection
+    ↓
+Memory Reflection → Chroma Long-term Memory
     ↓
 Final Answer
             """,
@@ -139,13 +148,15 @@ User Question
     ↓
 LLM decides whether to use tools
     ↓
-Tool Call: RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer
+Tool Call: RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer / Long-term Memory
     ↓
 Tool Result
     ↓
 Draft Answer
     ↓
 Reflection
+    ↓
+Memory Reflection → Chroma Long-term Memory
     ↓
 Final Answer
             """,
@@ -173,7 +184,7 @@ Final Answer
             else:
                 st.warning("没有保存成功的文件，请检查文件类型。")
 
-    # 重新构建 Chroma 向量库
+    # 重新构建 Chroma 知识库
     if st.button("重新构建知识库"):
         with st.spinner("正在重新构建 Chroma 知识库..."):
             vectorstore_result = rebuild_vectorstore()
@@ -189,13 +200,46 @@ Final Answer
     st.markdown("### 🧠 学习会话记忆")
     st.caption(f"当前会话 ID：{st.session_state.thread_id[:8]}...")
 
-    # 开启新会话时，清空 Workflow、QA、Quiz、ReAct Agent 历史
+    # 开启新会话时，只清空短期会话状态；不会清空向量长期记忆
     if st.button("开启新学习会话"):
         st.session_state.thread_id = str(uuid.uuid4())
         st.session_state.latest_result = None
         st.session_state.quiz_feedback = ""
         st.session_state.qa_history = []
         st.session_state.react_agent_history = []
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 🗂️ 长期记忆管理")
+
+    memory_stats = get_memory_stats()
+    col_a, col_b = st.columns(2)
+    col_a.metric("有效记忆", memory_stats.get("active_count", memory_stats.get("count", 0)))
+    col_b.metric("已归档", memory_stats.get("archived_count", 0))
+    st.caption(f"总数：{memory_stats.get('count', 0)} 条")
+    st.caption(f"路径：{memory_stats.get('path', '')}")
+
+    if st.button("执行一次遗忘检查"):
+        with st.spinner("正在根据访问时间和访问次数检查长期记忆..."):
+            forgetting_result = apply_forgetting_policy(
+                max_idle_days=30,
+                max_access_count=1,
+            )
+        st.session_state.forgetting_result = forgetting_result
+        st.success(
+            f"遗忘检查完成：检查 {forgetting_result.get('checked', 0)} 条，归档 {forgetting_result.get('archived', 0)} 条。"
+        )
+        st.rerun()
+
+    if st.session_state.forgetting_result:
+        with st.expander("查看最近一次遗忘检查结果"):
+            st.write(st.session_state.forgetting_result)
+
+    confirm_clear_memory = st.checkbox("确认要清空向量长期记忆", value=False)
+    if st.button("清空长期记忆", disabled=not confirm_clear_memory):
+        clear_long_term_memory()
+        st.session_state.forgetting_result = None
+        st.success("长期记忆已清空。")
         st.rerun()
 
 
@@ -217,7 +261,7 @@ if mode == "Workflow Mode":
         if not goal.strip():
             st.warning("请先输入学习目标。")
         else:
-            with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验、复盘验收和 Reflection 自检..."):
+            with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验、复盘验收、Reflection 自检和长期记忆... "):
                 try:
                     # 调用固定 LangGraph 工作流
                     workflow_result = run_graph(
@@ -239,7 +283,7 @@ if mode == "Workflow Mode":
     result = st.session_state.latest_result
 
     if result:
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
             [
                 "📅 学习计划",
                 "🧑‍🏫 导师讲解",
@@ -248,6 +292,7 @@ if mode == "Workflow Mode":
                 "✅ 复盘验收",
                 "🧠 Reflection",
                 "📚 检索资料",
+                "🗂️ 长期记忆",
             ]
         )
 
@@ -261,7 +306,7 @@ if mode == "Workflow Mode":
 
         with tab3:
             st.subheader("💬 追问答疑")
-            st.caption("你可以针对今天的学习计划、导师讲解、RAG 资料继续追问。")
+            st.caption("你可以针对今天的学习计划、导师讲解、RAG 资料和长期记忆继续追问。")
 
             # 展示 Follow-up QA 历史
             if not st.session_state.qa_history:
@@ -288,7 +333,7 @@ if mode == "Workflow Mode":
                 if not followup_question.strip():
                     st.warning("请先输入你的追问问题。")
                 else:
-                    with st.spinner("EduPilot Agent 正在结合本轮内容和知识库回答..."):
+                    with st.spinner("EduPilot Agent 正在结合本轮内容、知识库和长期记忆回答..."):
                         answer = answer_followup_question(
                             goal=goal,
                             level=level,
@@ -376,8 +421,33 @@ if mode == "Workflow Mode":
                 st.markdown(result.get("final_answer", ""))
 
         with tab7:
-            st.subheader("📚 RAG 检索到的参考资料")
+            st.subheader("📚 RAG 与长期记忆检索上下文")
+            st.caption("retrieved_context 中同时包含本地知识库 RAG 检索结果和向量长期记忆召回结果。")
             st.markdown(result.get("retrieved_context", ""))
+
+        with tab8:
+            st.subheader("🗂️ 向量长期记忆")
+            st.caption("Workflow 完成后，系统会通过 Memory Reflection 判断本轮学习事件是否值得写入长期记忆。")
+
+            memory_result = result.get("memory_result", {})
+            if memory_result:
+                if memory_result.get("saved"):
+                    st.success("本轮 Workflow 已写入长期记忆。")
+                elif memory_result.get("action") == "discard":
+                    st.info("Memory Reflection 判断本轮内容不需要写入长期记忆。")
+                else:
+                    st.warning("本轮长期记忆未写入或写入时发生异常。")
+
+                st.markdown("### 本轮记忆写入结果")
+                st.write(memory_result)
+            else:
+                st.info("暂无本轮长期记忆写入结果。")
+
+            st.markdown("### 本轮召回的长期记忆")
+            st.markdown(result.get("long_term_memory", "暂无相关长期记忆。"))
+
+            st.markdown("### 当前长期记忆库统计")
+            st.write(get_memory_stats())
 
         # 调试入口：查看 LangGraph State 原始结果
         with st.expander("查看原始 State 数据"):
@@ -389,7 +459,7 @@ if mode == "Workflow Mode":
 # =========================
 else:
     st.subheader("🛠️ ReAct Agent Mode")
-    st.caption("这个模式会让模型根据你的问题自主选择 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer 等工具，并在最终回答后进行 Reflection 自检改写。")
+    st.caption("这个模式会让模型根据你的问题自主选择 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer / Long-term Memory 等工具，并在最终回答后进行 Reflection 自检改写。")
 
     # 读取最近一次 Workflow 结果；没有运行过 Workflow 时为空字典
     latest_result = st.session_state.latest_result or {}
@@ -398,7 +468,7 @@ else:
     if latest_result:
         st.success("已检测到 Workflow Mode 生成过的学习上下文，ReAct Agent 可以读取并调用相关工具。")
     else:
-        st.info("当前还没有 Workflow Mode 生成的学习上下文。ReAct Agent 仍可独立调用 Planner / Tutor / RAG / Quiz / QA / Reviewer 等工具，建议先运行 Workflow，回答会更贴合本轮学习内容。")
+        st.info("当前还没有 Workflow Mode 生成的学习上下文。ReAct Agent 仍可独立调用 Planner / Tutor / RAG / Quiz / QA / Reviewer / Long-term Memory 等工具，建议先运行 Workflow，回答会更贴合本轮学习内容。")
 
     st.markdown("### 可用工具")
     st.markdown(
@@ -410,13 +480,14 @@ else:
 - `grade_quiz_answer_tool`：封装 Quiz 批改；
 - `qa_tool`：封装 Follow-up QA；
 - `review_tool`：封装 Reviewer 复盘验收；
-- `get_current_context_tool`：读取当前会话上下文。
+- `get_current_context_tool`：读取当前会话上下文；
+- `long_term_memory_tool`：检索 Chroma 向量长期记忆。
         """
     )
 
-    # 展示 ReAct Agent 历史对话、Reflection 和工具调用轨迹
+    # 展示 ReAct Agent 历史对话、Reflection、工具调用轨迹和记忆写入结果
     if not st.session_state.react_agent_history:
-        st.info("目前还没有 ReAct Agent 对话。可以先问：老师，我今天想学习 ReAct Tool Calling，请你直接给我一份学习计划和小测验。")
+        st.info("目前还没有 ReAct Agent 对话。可以先问：老师，请根据我的长期记忆总结我目前 EduPilot 项目的进度和下一步任务。")
     else:
         for item in st.session_state.react_agent_history:
             with st.chat_message("user"):
@@ -446,12 +517,17 @@ else:
                             st.markdown(f"**工具返回：`{step.get('name', '')}`**")
                             st.code(step.get("content", ""), language="text")
 
+            # 展示 ReAct 交互后的长期记忆写入结果
+            if item.get("memory_result"):
+                with st.expander("查看本轮长期记忆写入结果"):
+                    st.write(item.get("memory_result"))
+
     # ReAct Agent 输入表单：用户自由提问，由模型决定是否调用工具
     with st.form("react_agent_form", clear_on_submit=True):
         react_question = st.text_area(
             "请输入你想让 ReAct Agent 处理的问题",
             height=140,
-            placeholder="例如：老师，请重新生成一套关于 Tool Calling 的小测验。",
+            placeholder="例如：老师，请根据我的长期记忆，总结我目前 EduPilot 项目的进度和下一步任务。",
         )
 
         submit_react_question = st.form_submit_button("提交给 ReAct Agent")
@@ -473,6 +549,7 @@ else:
                 "retrieved_context": latest_result.get("retrieved_context", ""),
                 "workflow_reflection": latest_result.get("workflow_reflection", ""),
                 "final_answer": latest_result.get("final_answer", ""),
+                "long_term_memory": latest_result.get("long_term_memory", ""),
                 "qa_history": st.session_state.qa_history,
                 "react_agent_history": st.session_state.react_agent_history,
             }
@@ -490,6 +567,22 @@ else:
                     st.error(str(exc))
                     st.stop()
 
+            # ReAct 完成后，尝试把本轮交互沉淀为长期记忆。
+            # 失败不影响 ReAct 主回答。
+            try:
+                react_memory_result = record_react_memory(
+                    goal=goal,
+                    level=level,
+                    question=react_question,
+                    answer=react_result.get("final_answer", ""),
+                )
+            except Exception as exc:
+                react_memory_result = {
+                    "saved": False,
+                    "action": "error",
+                    "reason": str(exc),
+                }
+
             # 保存本轮 ReAct 对话，供页面展示和后续上下文使用
             st.session_state.react_agent_history.append(
                 {
@@ -499,6 +592,7 @@ else:
                     "reflection": react_result.get("reflection", ""),
                     "used_reflection": react_result.get("used_reflection", False),
                     "trace": react_result.get("trace", []),
+                    "memory_result": react_memory_result,
                 }
             )
 

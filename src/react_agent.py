@@ -31,6 +31,7 @@ def build_system_prompt():
     6. grade_quiz_answer_tool：调用 Grading 模块批改答案；
     7. qa_tool：调用 QA 模块回答追问；
     8. review_tool：调用 Reviewer 模块生成复盘验收；
+    9. long_term_memory_tool：检索向量长期记忆；
 
     工具选择原则：
     1. 如果问题需要知识库资料，优先调用 rag_tool；
@@ -40,6 +41,7 @@ def build_system_prompt():
     5. 如果学生要求出题或练习，调用 quiz_tool；
     6. 如果学生提交答案并要求批改，调用 grade_quiz_answer_tool；
     7. 如果学生要求复盘、验收标准、总结或明日补救，调用 review_tool；
+    8. 如果问题要求回顾之前进度、薄弱点、学习历史，优先调用 long_term_memory_tool；
 
     重要：
     - ReAct Agent Mode 不应该强依赖 Workflow Mode 先运行；

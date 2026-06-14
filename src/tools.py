@@ -1,6 +1,7 @@
 from langchain.tools import tool
 
-from src.history import format_qa_history, format_react_agent_history
+from src.long_term_memory import retrieve_long_term_memory
+from src.short_term_memory import format_qa_history, format_react_agent_history
 from src.planner import generate_learning_plan
 from src.qa import answer_followup_question
 from src.quiz import generate_quiz, grade_quiz
@@ -27,12 +28,17 @@ def build_tools(context: dict):
 
     qa_history_text = format_qa_history(qa_history)
     react_history_text = format_react_agent_history(react_history)
+    long_term_memory = retrieve_long_term_memory(goal)
+
     history_text = f"""
         【qa问答历史】
         {qa_history_text}
         
         【ReAct Agent 问答历史】
         {react_history_text}
+        
+        【长期记忆】
+        {long_term_memory}
         """
 
 
@@ -260,6 +266,17 @@ def build_tools(context: dict):
             history=history_text,
         )
 
+    @tool
+    def long_term_memory_tool(query: str) -> str:
+        """
+        Search EduPilot vector long-term memory.
+
+        Use this tool when the student asks about previous progress, weak points,
+        learning history, preferences, or what to continue next based on memory.
+        """
+
+        return retrieve_long_term_memory(query or goal, k=4)
+
 
     return [
         rag_tool,
@@ -270,4 +287,5 @@ def build_tools(context: dict):
         grade_quiz_answer_tool,
         qa_tool,
         review_tool,
+        long_term_memory_tool,
     ]

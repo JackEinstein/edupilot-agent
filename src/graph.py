@@ -5,9 +5,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 
+from src.long_term_memory import record_workflow_memory, retrieve_long_term_memory
 from src.reflection import reflect_node_output, reflect_workflow_output
 from src.quiz import generate_quiz
-from src.history import format_langgraph_messages
+from src.short_term_memory import format_langgraph_messages
 from src.retriever import format_retrieved_chunks
 from src.reviewer import generate_review
 from src.planner import generate_learning_plan
@@ -38,6 +39,8 @@ class EduPilotState(TypedDict, total=False):
     final_answer: str
 
     messages: Annotated[list[AnyMessage], add_messages]
+
+    long_term_memory: str
 
 
 def _build_light_reflection_context(state: EduPilotState, stage: str, history: str = "") -> dict:
@@ -97,13 +100,27 @@ def retriever_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that retrieve knowledge from vectorstore
     """
 
-    retrieve = format_retrieved_chunks(
+    retrieved_knowledge = format_retrieved_chunks(
         query=state['goal'],
         k=3
     )
 
+    retrieved_memory = retrieve_long_term_memory(
+        query=state['goal'],
+        k=4
+    )
+
+    retrieved_context = f"""
+        【从知识库检索的文本】
+        {retrieved_knowledge}
+        
+        【从长期记忆检索的文本】
+        {retrieved_memory}
+        """
+
     return {
-        'retrieved_context': retrieve,
+        'retrieved_context': retrieved_context,
+        'long_term_memory': retrieved_memory,
     }
 
 
@@ -112,7 +129,15 @@ def planner_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that generate today's learning plan
     """
 
-    history = format_langgraph_messages(state.get('messages', [])[:-1])
+    short_term_memory = format_langgraph_messages(state.get('messages', [])[:-1])
+    long_term_memory = state.get('long_term_memory', '')
+    history = f"""
+        【短期记忆】
+        {short_term_memory}
+        
+        【长期记忆】
+        {long_term_memory}
+        """
 
     plan = generate_learning_plan(
         goal=state['goal'],
@@ -131,7 +156,15 @@ def tutor_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that explain today's knowledge
     """
 
-    history = format_langgraph_messages(state.get('messages', [])[:-1])
+    short_term_memory = format_langgraph_messages(state.get('messages', [])[:-1])
+    long_term_memory = state.get('long_term_memory', '')
+    history = f"""
+        【短期记忆】
+        {short_term_memory}
+
+        【长期记忆】
+        {long_term_memory}
+        """
 
     explanation = generate_tutor_explanation(
         goal=state['goal'],
@@ -163,7 +196,15 @@ def quiz_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that generate today's quiz and correct student's answer
     """
 
-    history = format_langgraph_messages(state.get('messages', [])[:-1])
+    short_term_memory = format_langgraph_messages(state.get('messages', [])[:-1])
+    long_term_memory = state.get('long_term_memory', '')
+    history = f"""
+        【短期记忆】
+        {short_term_memory}
+
+        【长期记忆】
+        {long_term_memory}
+        """
 
     quiz = generate_quiz(
         goal=state['goal'],
@@ -195,7 +236,15 @@ def reviewer_node(state: EduPilotState) -> EduPilotState:
     A node in LangGraph that review knowledge in the past
     """
 
-    history = format_langgraph_messages(state.get('messages', [])[:-1])
+    short_term_memory = format_langgraph_messages(state.get('messages', [])[:-1])
+    long_term_memory = state.get('long_term_memory', '')
+    history = f"""
+        【短期记忆】
+        {short_term_memory}
+
+        【长期记忆】
+        {long_term_memory}
+        """
 
     review = generate_review(
         goal=state['goal'],
@@ -252,7 +301,15 @@ def reflection_node(state: EduPilotState) -> EduPilotState:
     into LangGraph memory.
     """
 
-    history = format_langgraph_messages(state.get('messages', [])[:-1])
+    short_term_memory = format_langgraph_messages(state.get('messages', [])[:-1])
+    long_term_memory = state.get('long_term_memory', '')
+    history = f"""
+        【短期记忆】
+        {short_term_memory}
+
+        【长期记忆】
+        {long_term_memory}
+        """
 
     final_reflection = reflect_workflow_output(
         context=_build_light_reflection_context(
@@ -348,4 +405,20 @@ def run_graph(goal, level, hours, thread_id='default', enable_reflection=True):
     }
 
     result = edupilot_graph.invoke(initial_state, config)
+
+    # 保存长期记忆
+    try:
+        result['memory_result'] = record_workflow_memory(
+            goal=goal,
+            level=level,
+            workflow_result=result,
+        )
+
+    except Exception as exc:
+        result['memory_result'] = {
+            'saved': False,
+            'action': 'error',
+            'reason': str(exc),
+        }
+
     return result

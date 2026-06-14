@@ -1,4 +1,5 @@
-from src.history import format_qa_history
+from src.long_term_memory import record_qa_memory
+from src.short_term_memory import format_qa_history
 from src.llm import get_llm
 from src.retriever import format_retrieved_chunks
 
@@ -71,4 +72,17 @@ def answer_followup_question(goal, level, learning_plan, tutor_explanation, retr
     messages = [system_message, human_message]
 
     answer = llm.invoke(messages)
+
+    # 把 qa 对话保存进长期记忆
+    try:
+        record_qa_memory(
+            goal=goal,
+            level=level,
+            question=question,
+            answer=answer,
+        )
+
+    except Exception:
+        pass
+
     return answer.content
