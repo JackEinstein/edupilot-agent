@@ -9,7 +9,7 @@ from src.long_term_memory import record_workflow_memory, retrieve_long_term_memo
 from src.reflection import reflect_node_output, reflect_workflow_output
 from src.quiz import generate_quiz
 from src.short_term_memory import format_langgraph_messages
-from src.retriever import format_retrieved_chunks
+from src.retriever import format_retrieved_chunks, DEFAULT_RETRIEVAL_MODE
 from src.reviewer import generate_review
 from src.planner import generate_learning_plan
 from src.tutor import generate_tutor_explanation
@@ -20,6 +20,10 @@ class EduPilotState(TypedDict, total=False):
     level: str
     hours: int
     enable_reflection: bool
+
+    rag_top_k: int
+    rag_fetch_k: int
+    retrieval_mode: str
 
     retrieved_context: str
 
@@ -102,7 +106,9 @@ def retriever_node(state: EduPilotState) -> EduPilotState:
 
     retrieved_knowledge = format_retrieved_chunks(
         query=state['goal'],
-        k=3
+        k=state.get('rag_top_k', 3),
+        fetch_k=state.get('rag_fetch_k', None),
+        retrieval_mode=state.get('retrieval_mode', DEFAULT_RETRIEVAL_MODE),
     )
 
     retrieved_memory = retrieve_long_term_memory(
@@ -361,7 +367,16 @@ def build_graph():
 edupilot_graph = build_graph()
 
 
-def run_graph(goal, level, hours, thread_id='default', enable_reflection=True):
+def run_graph(
+    goal,
+    level,
+    hours,
+    thread_id='default',
+    enable_reflection=True,
+    rag_top_k=3,
+    rag_fetch_k=8,
+    retrieval_mode=DEFAULT_RETRIEVAL_MODE,
+):
     """
     Run LangGraph Workflow
     """
@@ -377,6 +392,10 @@ def run_graph(goal, level, hours, thread_id='default', enable_reflection=True):
         'level': level,
         'hours': hours,
         'enable_reflection': enable_reflection,
+
+        'rag_top_k': rag_top_k,
+        'rag_fetch_k': rag_fetch_k,
+        'retrieval_mode': retrieval_mode,
 
         'retrieved_context': '',
 

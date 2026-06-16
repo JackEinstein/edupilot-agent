@@ -1,10 +1,21 @@
 from src.long_term_memory import record_qa_memory
 from src.short_term_memory import format_qa_history
 from src.llm import get_llm
-from src.retriever import format_retrieved_chunks
+from src.retriever import format_retrieved_chunks, DEFAULT_RETRIEVAL_MODE
 
 
-def answer_followup_question(goal, level, learning_plan, tutor_explanation, retrieved_context, qa_history, question):
+def answer_followup_question(
+    goal,
+    level,
+    learning_plan,
+    tutor_explanation,
+    retrieved_context,
+    qa_history,
+    question,
+    rag_top_k=3,
+    rag_fetch_k=8,
+    retrieval_mode=DEFAULT_RETRIEVAL_MODE,
+):
     """
     根据本轮学习内容、RAG知识库、问答历史回答学生的问题
     """
@@ -13,7 +24,12 @@ def answer_followup_question(goal, level, learning_plan, tutor_explanation, retr
 
     qa_history_text = format_qa_history(qa_history)
 
-    followup_context = format_retrieved_chunks(question, k=3)
+    followup_context = format_retrieved_chunks(
+        query=question,
+        k=rag_top_k,
+        fetch_k=rag_fetch_k,
+        retrieval_mode=retrieval_mode,
+    )
 
     system_message = """
         你是 EduPilot Agent 的追问答疑导师。

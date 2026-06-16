@@ -5,7 +5,7 @@ from src.short_term_memory import format_qa_history, format_react_agent_history
 from src.planner import generate_learning_plan
 from src.qa import answer_followup_question
 from src.quiz import generate_quiz, grade_quiz
-from src.retriever import format_retrieved_chunks
+from src.retriever import format_retrieved_chunks, DEFAULT_RETRIEVAL_MODE
 from src.reviewer import generate_review
 from src.tutor import generate_tutor_explanation
 
@@ -26,6 +26,10 @@ def build_tools(context: dict):
     qa_history = context.get("qa_history") or []
     react_history = context.get("react_agent_history") or []
 
+    rag_top_k = int(context.get("rag_top_k") or 3)
+    rag_fetch_k = int(context.get("rag_fetch_k") or 8)
+    retrieval_mode = context.get("retrieval_mode") or DEFAULT_RETRIEVAL_MODE
+
     qa_history_text = format_qa_history(qa_history)
     react_history_text = format_react_agent_history(react_history)
     long_term_memory = retrieve_long_term_memory(goal)
@@ -41,12 +45,18 @@ def build_tools(context: dict):
         {long_term_memory}
         """
 
-
-    def _get_retrieved_context(query='', k=3) -> str:
+    def _get_retrieved_context(query='', k=None) -> str:
         if retrieved_context and not query:
             return retrieved_context
 
-        return format_retrieved_chunks(query=query, k=k)
+        active_k = int(k or rag_top_k)
+
+        return format_retrieved_chunks(
+            query=query or goal,
+            k=active_k,
+            fetch_k=rag_fetch_k,
+            retrieval_mode=retrieval_mode,
+        )
 
     def _format_current_context():
         return f"""
@@ -243,6 +253,9 @@ def build_tools(context: dict):
             retrieved_context=tool_context,
             qa_history=qa_history,
             question=question,
+            rag_top_k=rag_top_k,
+            rag_fetch_k=rag_fetch_k,
+            retrieval_mode=retrieval_mode,
         )
 
     @tool

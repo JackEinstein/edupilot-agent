@@ -7,3 +7,5 @@ storage/chroma/
 .idea/
 .pytest_cache/
 data/chroma_db/
+data/memory/
+data/memory_chroma_db/

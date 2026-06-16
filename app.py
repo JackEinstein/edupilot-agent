@@ -1,3 +1,4 @@
+import inspect
 import uuid
 
 import streamlit as st
@@ -7,8 +8,85 @@ from src.long_term_memory import clear_long_term_memory, record_react_memory
 from src.qa import answer_followup_question
 from src.quiz import grade_quiz
 from src.react_agent import run_react_agent
-from src.retriever import save_uploaded_files, rebuild_vectorstore
+from src.retriever import rebuild_vectorstore, save_uploaded_files
+
+try:
+    from src.retriever import search_knowledge as _search_knowledge
+except ImportError:
+    _search_knowledge = None
 from src.vector_memory import apply_forgetting_policy, get_memory_stats
+
+
+# =========================
+# RAG 检索模式兼容配置
+# =========================
+RETRIEVAL_ROUGH = "rough"
+RETRIEVAL_LIGHT_RERANK = "light_rerank"
+RETRIEVAL_MODEL_RERANK = "model_rerank"
+DEFAULT_RETRIEVAL_MODE = RETRIEVAL_LIGHT_RERANK
+
+
+def _accepts_var_kwargs(func) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+
+    return any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
+
+
+def _supports_param(func, param_name: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+
+    return param_name in signature.parameters or _accepts_var_kwargs(func)
+
+
+def _call_with_supported_kwargs(func, **kwargs):
+    if _accepts_var_kwargs(func):
+        return func(**kwargs)
+
+    supported_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if _supports_param(func, key)
+    }
+    return func(**supported_kwargs)
+
+
+def _enable_rerank_from_mode(retrieval_mode: str) -> bool:
+    return retrieval_mode in {RETRIEVAL_LIGHT_RERANK, RETRIEVAL_MODEL_RERANK}
+
+
+def _run_graph_with_rerank(**kwargs):
+    retrieval_mode = kwargs.get("retrieval_mode", DEFAULT_RETRIEVAL_MODE)
+    kwargs["enable_rerank"] = _enable_rerank_from_mode(retrieval_mode)
+    return _call_with_supported_kwargs(run_graph, **kwargs)
+
+
+def _answer_followup_with_rerank(**kwargs):
+    retrieval_mode = kwargs.get("retrieval_mode", DEFAULT_RETRIEVAL_MODE)
+    kwargs["enable_rerank"] = _enable_rerank_from_mode(retrieval_mode)
+    return _call_with_supported_kwargs(answer_followup_question, **kwargs)
+
+
+def _search_knowledge_with_rerank(query: str, k: int, fetch_k: int, retrieval_mode: str):
+    if _search_knowledge is None:
+        return []
+
+    kwargs = {
+        "query": query,
+        "k": int(k),
+        "fetch_k": int(fetch_k),
+        "retrieval_mode": retrieval_mode,
+        "enable_rerank": _enable_rerank_from_mode(retrieval_mode),
+    }
+    return _call_with_supported_kwargs(_search_knowledge, **kwargs)
 
 
 # =========================
@@ -72,6 +150,7 @@ EduPilot Agent 当前版本支持：
 10. 支持轻量级 Workflow Reflection：Tutor / Quiz / Reviewer 节点级自检 + 全局 Workflow 自检；
 11. 支持 ReAct Agent 最终回答后的 Reflection 自检改写；
 12. 支持基于 Chroma 的向量数据库长期记忆，并提供轻量级遗忘机制。
+13. 支持 3 种 rerank 模式：粗召回、轻量重排序、模型重排序
 """
 )
 
@@ -115,6 +194,48 @@ with st.sidebar:
         help="开启后，Workflow Mode 会执行轻量级节点自检和全局自检；ReAct Agent Mode 会对最终回答进行自检改写。",
     )
 
+    st.markdown("---")
+    st.header("🔎 RAG 召回 / Rerank 设置")
+
+    retrieval_mode = st.selectbox(
+        "检索模式",
+        options=[
+            RETRIEVAL_ROUGH,
+            RETRIEVAL_LIGHT_RERANK,
+            RETRIEVAL_MODEL_RERANK,
+        ],
+        index=[
+            RETRIEVAL_ROUGH,
+            RETRIEVAL_LIGHT_RERANK,
+            RETRIEVAL_MODEL_RERANK,
+        ].index(DEFAULT_RETRIEVAL_MODE),
+        help=(
+            "rough：只做 Chroma 向量粗召回；"
+            "light_rerank：先扩大召回候选，再用轻量规则重排；"
+            "model_rerank：尝试使用 CrossEncoder 重排，失败时自动降级到 light_rerank。"
+        ),
+    )
+
+    rag_top_k = st.number_input(
+        "最终返回 top_k",
+        min_value=1,
+        max_value=10,
+        value=3,
+        step=1,
+        help="最终传给 LLM 的知识库片段数量。",
+    )
+
+    rag_fetch_k = st.number_input(
+        "粗召回候选 fetch_k",
+        min_value=int(rag_top_k),
+        max_value=30,
+        value=max(8, int(rag_top_k) * 3),
+        step=1,
+        help="rerank 前先从 Chroma 召回的候选片段数量。rough 模式下主要使用 top_k。",
+    )
+
+    st.caption(f"当前检索配置：{retrieval_mode} | top_k={rag_top_k} | fetch_k={rag_fetch_k}")
+
     # 根据当前模式展示不同的执行流程
     if mode == "Workflow Mode":
         st.markdown("### 当前工作流")
@@ -122,7 +243,7 @@ with st.sidebar:
             """
 User Input
     ↓
-Retriever: RAG + Long-term Memory
+Retriever: RAG Retrieval / Rerank + Long-term Memory
     ↓
 Planner
     ↓
@@ -252,6 +373,75 @@ goal = st.text_area(
 
 
 # =========================
+# RAG Rerank 调试面板：只用于验证三种检索模式
+# =========================
+with st.expander("🔎 RAG 召回 / Rerank 调试面板", expanded=False):
+    st.caption(
+        "用于单独测试 Day 9 的三种检索模式：rough、light_rerank、model_rerank。"
+        "这里不会写入短期记忆或长期记忆。"
+    )
+
+    debug_query = st.text_input(
+        "调试检索 Query",
+        value=goal,
+        placeholder="例如：LangGraph 的 thread_id 有什么作用？",
+    )
+
+    if st.button("运行 RAG 检索调试"):
+        if not debug_query.strip():
+            st.warning("请先输入调试 Query。")
+        else:
+            with st.spinner("正在执行 RAG 检索与 rerank..."):
+                debug_results = _search_knowledge_with_rerank(
+                    query=debug_query,
+                    k=int(rag_top_k),
+                    fetch_k=int(rag_fetch_k),
+                    retrieval_mode=retrieval_mode,
+                )
+
+            if not debug_results:
+                st.warning("没有检索到结果。请确认已经上传资料并重新构建知识库。")
+            else:
+                st.success(f"检索完成，共返回 {len(debug_results)} 条结果。")
+
+                summary_rows = []
+                for i, item in enumerate(debug_results, start=1):
+                    summary_rows.append(
+                        {
+                            "final_rank": i,
+                            "source": item.get("source"),
+                            "chunk_id": item.get("chunk_id"),
+                            "retrieval_mode": item.get("retrieval_mode"),
+                            "initial_rank": item.get("initial_rank"),
+                            "distance": item.get("distance"),
+                            "vector_score": item.get("vector_score"),
+                            "keyword_score": item.get("keyword_score"),
+                            "rerank_score": item.get("rerank_score"),
+                            "model_rerank_score": item.get("model_rerank_score"),
+                            "model_rerank_error": item.get("model_rerank_error"),
+                        }
+                    )
+
+                st.dataframe(summary_rows, use_container_width=True)
+
+                for i, item in enumerate(debug_results, start=1):
+                    with st.expander(f"查看结果 {i}：{item.get('source')} / chunk {item.get('chunk_id')}"):
+                        st.write(
+                            {
+                                "retrieval_mode": item.get("retrieval_mode"),
+                                "initial_rank": item.get("initial_rank"),
+                                "distance": item.get("distance"),
+                                "vector_score": item.get("vector_score"),
+                                "keyword_score": item.get("keyword_score"),
+                                "rerank_score": item.get("rerank_score"),
+                                "model_rerank_score": item.get("model_rerank_score"),
+                                "model_rerank_error": item.get("model_rerank_error"),
+                            }
+                        )
+                        st.markdown(item.get("content", ""))
+
+
+# =========================
 # Workflow Mode：固定 LangGraph 学习闭环
 # =========================
 if mode == "Workflow Mode":
@@ -264,12 +454,15 @@ if mode == "Workflow Mode":
             with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验、复盘验收、Reflection 自检和长期记忆... "):
                 try:
                     # 调用固定 LangGraph 工作流
-                    workflow_result = run_graph(
+                    workflow_result = _run_graph_with_rerank(
                         goal=goal,
                         level=level,
                         hours=hours,
                         thread_id=st.session_state.thread_id,
                         enable_reflection=enable_reflection,
+                        rag_top_k=int(rag_top_k),
+                        rag_fetch_k=int(rag_fetch_k),
+                        retrieval_mode=retrieval_mode,
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -334,7 +527,7 @@ if mode == "Workflow Mode":
                     st.warning("请先输入你的追问问题。")
                 else:
                     with st.spinner("EduPilot Agent 正在结合本轮内容、知识库和长期记忆回答..."):
-                        answer = answer_followup_question(
+                        answer = _answer_followup_with_rerank(
                             goal=goal,
                             level=level,
                             question=followup_question,
@@ -342,6 +535,9 @@ if mode == "Workflow Mode":
                             tutor_explanation=result.get("tutor_explanation", ""),
                             retrieved_context=result.get("retrieved_context", ""),
                             qa_history=st.session_state.qa_history,
+                            rag_top_k=int(rag_top_k),
+                            rag_fetch_k=int(rag_fetch_k),
+                            retrieval_mode=retrieval_mode,
                         )
 
                     # 将本轮追问加入 QA 历史
@@ -423,6 +619,7 @@ if mode == "Workflow Mode":
         with tab7:
             st.subheader("📚 RAG 与长期记忆检索上下文")
             st.caption("retrieved_context 中同时包含本地知识库 RAG 检索结果和向量长期记忆召回结果。")
+            st.info(f"当前 RAG 配置：retrieval_mode={retrieval_mode}，top_k={rag_top_k}，fetch_k={rag_fetch_k}")
             st.markdown(result.get("retrieved_context", ""))
 
         with tab8:
@@ -484,6 +681,8 @@ else:
 - `long_term_memory_tool`：检索 Chroma 向量长期记忆。
         """
     )
+
+    st.info(f"当前 ReAct RAG 配置：retrieval_mode={retrieval_mode}，top_k={rag_top_k}，fetch_k={rag_fetch_k}")
 
     # 展示 ReAct Agent 历史对话、Reflection、工具调用轨迹和记忆写入结果
     if not st.session_state.react_agent_history:
@@ -552,6 +751,9 @@ else:
                 "long_term_memory": latest_result.get("long_term_memory", ""),
                 "qa_history": st.session_state.qa_history,
                 "react_agent_history": st.session_state.react_agent_history,
+                "rag_top_k": int(rag_top_k),
+                "rag_fetch_k": int(rag_fetch_k),
+                "retrieval_mode": retrieval_mode,
             }
 
             with st.spinner("ReAct Agent 正在判断是否需要调用工具，并生成回答..."):
