@@ -9,6 +9,8 @@ from src.qa import answer_followup_question
 from src.quiz import grade_quiz
 from src.react_agent import run_react_agent
 from src.retriever import rebuild_vectorstore, save_uploaded_files
+from src.prompts import get_prompt_template, list_prompt_specs
+from src.skills import detect_skills, format_skills_for_display, list_skills
 
 try:
     from src.retriever import search_knowledge as _search_knowledge
@@ -89,6 +91,16 @@ def _search_knowledge_with_rerank(query: str, k: int, fetch_k: int, retrieval_mo
     return _call_with_supported_kwargs(_search_knowledge, **kwargs)
 
 
+def _skill_display_names(user_input: str) -> list[str]:
+    """Return matched Skill display names for Streamlit state and debug display."""
+    return [skill.display_name for skill in detect_skills(user_input)]
+
+
+def _skill_internal_names(user_input: str) -> list[str]:
+    """Return matched Skill internal names for trace/debug data."""
+    return [skill.name for skill in detect_skills(user_input)]
+
+
 # =========================
 # 页面基础配置
 # =========================
@@ -150,7 +162,8 @@ EduPilot Agent 当前版本支持：
 10. 支持轻量级 Workflow Reflection：Tutor / Quiz / Reviewer 节点级自检 + 全局 Workflow 自检；
 11. 支持 ReAct Agent 最终回答后的 Reflection 自检改写；
 12. 支持基于 Chroma 的向量数据库长期记忆，并提供轻量级遗忘机制。
-13. 支持 3 种 rerank 模式：粗召回、轻量重排序、模型重排序
+13. 支持 3 种 rerank 模式：粗召回、轻量重排序、模型重排序；
+14. 支持 Prompt Registry 与 Skill Registry 展示；Skill 仅在 app.py 前端展示和 ReAct 上下文中使用，不改动 graph.py 主工作流。
 """
 )
 
@@ -236,12 +249,59 @@ with st.sidebar:
 
     st.caption(f"当前检索配置：{retrieval_mode} | top_k={rag_top_k} | fetch_k={rag_fetch_k}")
 
+
+    st.markdown("---")
+    st.header("🧩 Prompt / Skill 展示")
+
+    with st.expander("Skill Registry", expanded=False):
+        st.caption("Skill 是 EduPilot 的高层能力单元，用于说明用户意图会关联哪个 Prompt 和哪些 Tool。")
+
+        skill_demo_input = st.text_area(
+            "输入一句请求，查看命中的 Skill",
+            value="我想学习 LangGraph 的短期记忆机制，帮我安排今天的学习计划。",
+            height=90,
+            key="skill_demo_input",
+        )
+
+        st.markdown(format_skills_for_display(skill_demo_input))
+
+        with st.expander("查看全部 Skill"):
+            for skill in list_skills():
+                st.markdown(f"#### {skill['display_name']}")
+                st.write(skill["description"])
+                st.markdown(f"**关联 Prompt**：`{skill['prompt_name']}`")
+                st.markdown("**关联 Tools**：" + ", ".join(f"`{tool}`" for tool in skill["related_tools"]))
+                st.caption(f"示例请求：{skill['demo_query']}")
+                st.divider()
+
+    with st.expander("Prompt Registry", expanded=False):
+        st.caption("Prompt Registry 用于统一管理不同节点的提示词模板、版本和变量。")
+
+        prompt_specs = list_prompt_specs()
+        prompt_names = [item["name"] for item in prompt_specs]
+        selected_prompt = st.selectbox("选择 Prompt 模板", prompt_names)
+
+        selected_spec = next(
+            (item for item in prompt_specs if item["name"] == selected_prompt),
+            None,
+        )
+
+        if selected_spec:
+            st.markdown(f"**版本**：`{selected_spec['version']}`")
+            st.markdown(f"**说明**：{selected_spec['description']}")
+            st.markdown("**变量**：" + ", ".join(f"`{var}`" for var in selected_spec["variables"]))
+
+        with st.expander("查看完整 Prompt 模板"):
+            st.code(get_prompt_template(selected_prompt), language="text")
+
     # 根据当前模式展示不同的执行流程
     if mode == "Workflow Mode":
         st.markdown("### 当前工作流")
         st.code(
             """
 User Input
+    ↓
+App-side Skill Display: only for UI observability, graph.py unchanged
     ↓
 Retriever: RAG Retrieval / Rerank + Long-term Memory
     ↓
@@ -266,6 +326,8 @@ Final Answer
         st.code(
             """
 User Question
+    ↓
+Skill Registry: inject matched Skills into system prompt
     ↓
 LLM decides whether to use tools
     ↓
@@ -372,6 +434,11 @@ goal = st.text_area(
 )
 
 
+with st.expander("🧩 当前学习目标命中的 Skill", expanded=False):
+    st.caption("这里不会改变 Workflow 执行顺序，只用于展示当前输入在 Skill Registry 中命中的能力单元。")
+    st.markdown(format_skills_for_display(goal))
+
+
 # =========================
 # RAG Rerank 调试面板：只用于验证三种检索模式
 # =========================
@@ -445,6 +512,9 @@ with st.expander("🔎 RAG 召回 / Rerank 调试面板", expanded=False):
 # Workflow Mode：固定 LangGraph 学习闭环
 # =========================
 if mode == "Workflow Mode":
+    workflow_skill_names = _skill_display_names(goal)
+    st.info("当前输入命中的 Skill（仅 app.py 前端展示，不进入 graph.py）：" + "、".join(workflow_skill_names))
+
     run_button = st.button("生成学习方案", type="primary")
 
     if run_button:
@@ -476,7 +546,7 @@ if mode == "Workflow Mode":
     result = st.session_state.latest_result
 
     if result:
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
             [
                 "📅 学习计划",
                 "🧑‍🏫 导师讲解",
@@ -486,6 +556,7 @@ if mode == "Workflow Mode":
                 "🧠 Reflection",
                 "📚 检索资料",
                 "🗂️ 长期记忆",
+                "🧩 Skill / Prompt",
             ]
         )
 
@@ -646,6 +717,28 @@ if mode == "Workflow Mode":
             st.markdown("### 当前长期记忆库统计")
             st.write(get_memory_stats())
 
+        with tab9:
+            st.subheader("🧩 Skill / Prompt 调试")
+            st.caption(
+                "Workflow Mode 仍然保持原来的固定学习闭环；"
+                "这里的 Skill 识别只发生在 app.py 前端，用于展示当前输入可能对应的能力单元，"
+                "不会写入 graph.py，也不会改变 LangGraph 的节点顺序。"
+            )
+
+            st.markdown("### 当前学习目标命中的 Skill")
+            st.markdown(format_skills_for_display(goal))
+
+            st.markdown("### 当前 Prompt Registry")
+            st.dataframe(list_prompt_specs(), use_container_width=True)
+
+            with st.expander("说明：为什么不把 Skill 放进 graph.py？"):
+                st.markdown(
+                    "当前 Day 10 版本采用最小侵入方案："
+                    "`graph.py` 继续负责稳定的 Workflow 闭环，"
+                    "`app.py` 负责展示 Skill Registry 和 Prompt Registry。"
+                    "这样既能展示 Prompt / Skill 工程化设计，又不会破坏已经跑通的 LangGraph 主流程。"
+                )
+
         # 调试入口：查看 LangGraph State 原始结果
         with st.expander("查看原始 State 数据"):
             st.write(result)
@@ -684,6 +777,14 @@ else:
 
     st.info(f"当前 ReAct RAG 配置：retrieval_mode={retrieval_mode}，top_k={rag_top_k}，fetch_k={rag_fetch_k}")
 
+    with st.expander("🧩 ReAct Skill 路由说明", expanded=False):
+        st.markdown(
+            "ReAct Mode 会把用户问题命中的 Skill 注入 system prompt，辅助模型选择合适工具。"
+            "最终是否调用工具仍由 LLM 决定。"
+        )
+        st.markdown("### 当前学习目标命中的 Skill")
+        st.markdown(format_skills_for_display(goal))
+
     # 展示 ReAct Agent 历史对话、Reflection、工具调用轨迹和记忆写入结果
     if not st.session_state.react_agent_history:
         st.info("目前还没有 ReAct Agent 对话。可以先问：老师，请根据我的长期记忆总结我目前 EduPilot 项目的进度和下一步任务。")
@@ -694,6 +795,10 @@ else:
 
             with st.chat_message("assistant"):
                 st.markdown(item["final_answer"])
+
+            if item.get("matched_skill_names"):
+                with st.expander("查看本轮命中的 Skill"):
+                    st.write(item.get("matched_skill_names"))
 
             # 展示本轮 Reflection，便于调试和项目演示
             if item.get("used_reflection") or item.get("reflection") or item.get("draft_answer"):
@@ -735,6 +840,9 @@ else:
         if not react_question.strip():
             st.warning("请先输入问题。")
         else:
+            matched_skill_names = _skill_display_names(react_question)
+            matched_skill_internal_names = _skill_internal_names(react_question)
+
             # 构建 ReAct Agent 上下文：
             # 有 Workflow 结果时复用；没有时让 tools 自己补齐 Plan / Tutor / RAG 等内容
             current_context = {
@@ -754,6 +862,7 @@ else:
                 "rag_top_k": int(rag_top_k),
                 "rag_fetch_k": int(rag_fetch_k),
                 "retrieval_mode": retrieval_mode,
+                "matched_skills": matched_skill_internal_names,
             }
 
             with st.spinner("ReAct Agent 正在判断是否需要调用工具，并生成回答..."):
@@ -794,6 +903,8 @@ else:
                     "reflection": react_result.get("reflection", ""),
                     "used_reflection": react_result.get("used_reflection", False),
                     "trace": react_result.get("trace", []),
+                    "matched_skill_names": matched_skill_names,
+                    "matched_skills": matched_skill_internal_names,
                     "memory_result": react_memory_result,
                 }
             )

@@ -1,7 +1,10 @@
+from langchain_core.messages import SystemMessage
+
 from src.long_term_memory import record_qa_memory
 from src.short_term_memory import format_qa_history
 from src.llm import get_llm
 from src.retriever import format_retrieved_chunks, DEFAULT_RETRIEVAL_MODE
+from src.prompts import render_prompt
 
 
 def answer_followup_question(
@@ -31,61 +34,27 @@ def answer_followup_question(
         retrieval_mode=retrieval_mode,
     )
 
-    system_message = """
-        你是 EduPilot Agent 的追问答疑导师。
-    
-        你的任务是回答学生在导师讲解之后提出的追问问题。
-        
-        你必须优先基于以下信息回答：
-        1. 今天的学习目标；
-        2. 学生当前水平；
-        3. 今天的学习计划；
-        4. 今天的导师讲解；
-        5. 今天已经检索到的 RAG 资料；
-        6. 针对当前追问重新检索到的 RAG 资料；
-        7. 之前的追问答疑历史。
-        
-        回答要求：
-        1. 先直接回答学生问题；
-        2. 再解释背后的原因；
-        3. 如果涉及代码或项目结构，结合 EduPilot 当前项目说明；
-        4. 如果学生的问题暴露出误区，要明确指出；
-        5. 如果资料不足，要诚实说明“当前知识库资料不足”，不要编造；
-        6. 不要泛泛而谈，要围绕本轮学习内容；
-        7. 语气像老师带学生，清楚、耐心、具体。
-        
-        输出 Markdown 格式。
-        """
-
-    human_message = f"""
-        【今天的学习目标】
-        {goal}
-        
-        【学生当前水平】
-        {level}
-        
-        【今天的学习计划】
-        {learning_plan}
-        
-        【今天的导师讲解】
-        {tutor_explanation}
-        
+    prompt = render_prompt(
+        "qa",
+        question=question,
+        learning_goal=f"""
+        学习目标：{goal}
+        当前水平：{level}
+        """,
+        learning_plan=learning_plan,
+        tutor_answer=tutor_explanation,
+        rag_context=f"""
         【今天原始 RAG 检索资料】
         {retrieved_context}
-        
+
         【针对当前追问重新检索到的资料】
         {followup_context}
-        
-        【之前的追问答疑历史】
-        {qa_history_text}
-        
-        【学生当前追问】
-        {question}
-        
-        请回答学生当前追问。
-        """
+        """,
+        short_term_history=qa_history_text,
+        long_term_memory="",
+    )
 
-    messages = [system_message, human_message]
+    messages = [SystemMessage(content=prompt)]
 
     answer = llm.invoke(messages)
 
@@ -95,7 +64,7 @@ def answer_followup_question(
             goal=goal,
             level=level,
             question=question,
-            answer=answer,
+            answer=answer.content,
         )
 
     except Exception:
