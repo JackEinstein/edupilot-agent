@@ -12,7 +12,7 @@ from src.skills import format_skills_for_agent
 react_agent_checkpointer = InMemorySaver()
 
 
-def build_system_prompt(user_input: str = ""):
+def build_system_prompt(user_input: str = "", short_term_memory: str = ""):
     """
     Build system prompt for EduPilot ReAct-style Tool Calling Agent.
     """
@@ -20,6 +20,7 @@ def build_system_prompt(user_input: str = ""):
     return render_prompt(
         "react_system",
         skill_context=format_skills_for_agent(user_input),
+        short_term_memory=short_term_memory or "暂无 Redis 短期会话记忆。",
     )
 
 
@@ -63,7 +64,10 @@ def run_react_agent(context: dict, question: str, thread_id: str = 'default', en
     agent = create_agent(
         model=get_llm(),
         tools=build_tools(context),
-        system_prompt=build_system_prompt(question),
+        system_prompt=build_system_prompt(
+            user_input=question,
+            short_term_memory=context.get("short_term_memory", ""),
+        ),
         checkpointer=react_agent_checkpointer,
     )
 

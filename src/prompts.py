@@ -412,6 +412,7 @@ D.
         description="ReAct Agent 的系统提示词，注入 Skill 说明和工具使用规则。",
         variables=[
             "skill_context",
+            "short_term_memory",
         ],
         template="""
 你是 EduPilot Agent，一个面向个性化学习计划、RAG 导师讲解、测验批改、长期记忆和反思优化的 AI 学习助手。
@@ -421,6 +422,9 @@ D.
 
 【当前可用 Skill】
 {skill_context}
+
+【Redis 短期会话记忆】
+{short_term_memory}
 
 行为要求：
 1. 先判断用户意图属于哪个 Skill；
