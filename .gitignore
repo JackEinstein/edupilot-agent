@@ -9,3 +9,4 @@ storage/chroma/
 data/chroma_db/
 data/memory/
 data/memory_chroma_db/
+dump.rdb

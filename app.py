@@ -1,13 +1,11 @@
 import inspect
+import os
 import uuid
 
+import requests
 import streamlit as st
 
-from src.graph import run_graph
-from src.long_term_memory import clear_long_term_memory, record_react_memory
-from src.qa import answer_followup_question
-from src.quiz import grade_quiz
-from src.react_agent import run_react_agent
+from src.long_term_memory import clear_long_term_memory
 from src.retriever import rebuild_vectorstore, save_uploaded_files
 from src.prompts import get_prompt_template, list_prompt_specs
 from src.skills import detect_skills, format_skills_for_display, list_skills
@@ -26,6 +24,45 @@ RETRIEVAL_ROUGH = "rough"
 RETRIEVAL_LIGHT_RERANK = "light_rerank"
 RETRIEVAL_MODEL_RERANK = "model_rerank"
 DEFAULT_RETRIEVAL_MODE = RETRIEVAL_LIGHT_RERANK
+
+
+# =========================
+# FastAPI 客户端配置
+# =========================
+DEFAULT_API_BASE_URL = os.getenv("EDUPILOT_API_BASE_URL", "http://127.0.0.1:8000")
+
+
+def _api_url(path: str) -> str:
+    """Build backend URL from sidebar-configured FastAPI base URL."""
+
+    base_url = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL).rstrip("/")
+    return f"{base_url}/{path.lstrip('/')}"
+
+
+def _call_api(method: str, path: str, timeout: int = 180, **kwargs) -> dict:
+    """
+    Call FastAPI backend and convert network/API errors into Streamlit-friendly messages.
+    """
+
+    try:
+        response = requests.request(method, _api_url(path), timeout=timeout, **kwargs)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.ConnectionError as exc:
+        raise RuntimeError(
+            "FastAPI 服务未启动或地址不正确。请先运行：uvicorn api_server:app --reload"
+        ) from exc
+    except requests.exceptions.Timeout as exc:
+        raise RuntimeError("FastAPI 请求超时，请检查后端日志，或适当增大 timeout。") from exc
+    except requests.exceptions.HTTPError as exc:
+        detail = response.text
+        try:
+            detail = response.json().get("detail", detail)
+        except Exception:
+            pass
+        raise RuntimeError(f"FastAPI 返回错误：{detail}") from exc
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"FastAPI 请求失败：{exc}") from exc
 
 
 def _accepts_var_kwargs(func) -> bool:
@@ -63,18 +100,6 @@ def _call_with_supported_kwargs(func, **kwargs):
 
 def _enable_rerank_from_mode(retrieval_mode: str) -> bool:
     return retrieval_mode in {RETRIEVAL_LIGHT_RERANK, RETRIEVAL_MODEL_RERANK}
-
-
-def _run_graph_with_rerank(**kwargs):
-    retrieval_mode = kwargs.get("retrieval_mode", DEFAULT_RETRIEVAL_MODE)
-    kwargs["enable_rerank"] = _enable_rerank_from_mode(retrieval_mode)
-    return _call_with_supported_kwargs(run_graph, **kwargs)
-
-
-def _answer_followup_with_rerank(**kwargs):
-    retrieval_mode = kwargs.get("retrieval_mode", DEFAULT_RETRIEVAL_MODE)
-    kwargs["enable_rerank"] = _enable_rerank_from_mode(retrieval_mode)
-    return _call_with_supported_kwargs(answer_followup_question, **kwargs)
 
 
 def _search_knowledge_with_rerank(query: str, k: int, fetch_k: int, retrieval_mode: str):
@@ -138,6 +163,14 @@ if "react_agent_history" not in st.session_state:
 # 保存手动执行遗忘机制的结果，方便在侧边栏展示
 if "forgetting_result" not in st.session_state:
     st.session_state.forgetting_result = None
+
+# FastAPI 后端地址：Streamlit 会通过该地址调用后端 API
+if "api_base_url" not in st.session_state:
+    st.session_state.api_base_url = DEFAULT_API_BASE_URL
+
+# 保存 FastAPI / Redis 调试按钮的最近一次结果
+if "api_debug_result" not in st.session_state:
+    st.session_state.api_debug_result = None
 
 
 # =========================
@@ -347,6 +380,72 @@ Final Answer
         )
 
     st.markdown("---")
+    st.header("🔌 FastAPI / Redis 调试")
+
+    st.session_state.api_base_url = st.text_input(
+        "FastAPI 地址",
+        value=st.session_state.api_base_url,
+        help="本地默认是 http://127.0.0.1:8000。Streamlit 会通过这个地址调用后端 API。",
+    )
+
+    max_memory_rounds = st.number_input(
+        "Redis 读取轮数",
+        min_value=1,
+        max_value=50,
+        value=10,
+        step=1,
+        help="传给 /react/chat 和 /memory/history 的 max_memory_rounds。",
+    )
+
+    col_api_1, col_api_2 = st.columns(2)
+
+    if col_api_1.button("检查 API"):
+        try:
+            st.session_state.api_debug_result = _call_api("GET", "/health", timeout=5)
+            st.success("FastAPI 可访问。")
+        except RuntimeError as exc:
+            st.session_state.api_debug_result = {"error": str(exc)}
+            st.error(str(exc))
+
+    if col_api_2.button("查看 Redis"):
+        try:
+            st.session_state.api_debug_result = _call_api(
+                "GET",
+                "/memory/history",
+                timeout=10,
+                params={
+                    "session_id": st.session_state.thread_id,
+                    "max_memory_rounds": int(max_memory_rounds),
+                },
+            )
+            st.success("已读取当前 session 的 Redis 记忆。")
+        except RuntimeError as exc:
+            st.session_state.api_debug_result = {"error": str(exc)}
+            st.error(str(exc))
+
+    confirm_clear_redis = st.checkbox("确认清空当前 Redis 短期记忆", value=False)
+
+    if st.button("清空当前 Redis 记忆", disabled=not confirm_clear_redis):
+        try:
+            st.session_state.api_debug_result = _call_api(
+                "POST",
+                "/memory/clear",
+                timeout=10,
+                json={
+                    "session_id": st.session_state.thread_id,
+                    "max_memory_rounds": int(max_memory_rounds),
+                },
+            )
+            st.session_state.react_agent_history = []
+            st.success("当前 session 的 Redis 短期记忆已清空。")
+        except RuntimeError as exc:
+            st.session_state.api_debug_result = {"error": str(exc)}
+            st.error(str(exc))
+
+    with st.expander("查看 API / Redis 调试结果", expanded=False):
+        st.write(st.session_state.api_debug_result or "暂无调试结果。")
+
+    st.markdown("---")
     st.header("📚 知识库管理")
 
     # 上传本地学习资料，供 RAG 检索使用
@@ -521,19 +620,27 @@ if mode == "Workflow Mode":
         if not goal.strip():
             st.warning("请先输入学习目标。")
         else:
-            with st.spinner("EduPilot Agent 正在生成学习计划、导师讲解、小测验、复盘验收、Reflection 自检和长期记忆... "):
+            with st.spinner("EduPilot Agent 正在通过 FastAPI /workflow/run 生成学习计划、导师讲解、小测验、复盘验收、Reflection 自检和长期记忆..."):
                 try:
-                    # 调用固定 LangGraph 工作流
-                    workflow_result = _run_graph_with_rerank(
-                        goal=goal,
-                        level=level,
-                        hours=hours,
-                        thread_id=st.session_state.thread_id,
-                        enable_reflection=enable_reflection,
-                        rag_top_k=int(rag_top_k),
-                        rag_fetch_k=int(rag_fetch_k),
-                        retrieval_mode=retrieval_mode,
+                    payload = {
+                        "session_id": st.session_state.thread_id,
+                        "goal": goal,
+                        "level": level,
+                        "hours": int(hours),
+                        "enable_reflection": bool(enable_reflection),
+                        "rag_top_k": int(rag_top_k),
+                        "rag_fetch_k": int(rag_fetch_k),
+                        "retrieval_mode": retrieval_mode,
+                    }
+
+                    workflow_response = _call_api(
+                        "POST",
+                        "/workflow/run",
+                        json=payload,
+                        timeout=240,
                     )
+
+                    workflow_result = workflow_response.get("result", {})
                 except RuntimeError as exc:
                     st.error(str(exc))
                     st.stop()
@@ -597,19 +704,33 @@ if mode == "Workflow Mode":
                 if not followup_question.strip():
                     st.warning("请先输入你的追问问题。")
                 else:
-                    with st.spinner("EduPilot Agent 正在结合本轮内容、知识库和长期记忆回答..."):
-                        answer = _answer_followup_with_rerank(
-                            goal=goal,
-                            level=level,
-                            question=followup_question,
-                            learning_plan=result.get("learning_plan", ""),
-                            tutor_explanation=result.get("tutor_explanation", ""),
-                            retrieved_context=result.get("retrieved_context", ""),
-                            qa_history=st.session_state.qa_history,
-                            rag_top_k=int(rag_top_k),
-                            rag_fetch_k=int(rag_fetch_k),
-                            retrieval_mode=retrieval_mode,
-                        )
+                    with st.spinner("EduPilot Agent 正在通过 FastAPI /qa/followup 回答追问..."):
+                        try:
+                            payload = {
+                                "session_id": st.session_state.thread_id,
+                                "question": followup_question,
+                                "goal": goal,
+                                "level": level,
+                                "learning_plan": result.get("learning_plan", ""),
+                                "tutor_explanation": result.get("tutor_explanation", ""),
+                                "retrieved_context": result.get("retrieved_context", ""),
+                                "qa_history": st.session_state.qa_history,
+                                "rag_top_k": int(rag_top_k),
+                                "rag_fetch_k": int(rag_fetch_k),
+                                "retrieval_mode": retrieval_mode,
+                            }
+
+                            qa_response = _call_api(
+                                "POST",
+                                "/qa/followup",
+                                json=payload,
+                                timeout=180,
+                            )
+
+                            answer = qa_response.get("answer", "")
+                        except RuntimeError as exc:
+                            st.error(str(exc))
+                            st.stop()
 
                     # 将本轮追问加入 QA 历史
                     st.session_state.qa_history.append(
@@ -637,14 +758,28 @@ if mode == "Workflow Mode":
                 if not student_answer.strip():
                     st.warning("请先填写你的答案。")
                 else:
-                    with st.spinner("EduPilot Agent 正在批改你的答案..."):
-                        feedback = grade_quiz(
-                            goal=goal,
-                            level=level,
-                            quiz=result.get("quiz", ""),
-                            student_answer=student_answer,
-                            tutor_explanation=result.get("tutor_explanation", ""),
-                        )
+                    with st.spinner("EduPilot Agent 正在通过 FastAPI /quiz/grade 批改你的答案..."):
+                        try:
+                            payload = {
+                                "session_id": st.session_state.thread_id,
+                                "goal": goal,
+                                "level": level,
+                                "quiz": result.get("quiz", ""),
+                                "student_answer": student_answer,
+                                "tutor_explanation": result.get("tutor_explanation", ""),
+                            }
+
+                            grade_response = _call_api(
+                                "POST",
+                                "/quiz/grade",
+                                json=payload,
+                                timeout=180,
+                            )
+
+                            feedback = grade_response.get("feedback", "")
+                        except RuntimeError as exc:
+                            st.error(str(exc))
+                            st.stop()
 
                     st.session_state.quiz_feedback = feedback
                     st.success("批改完成！")
@@ -749,16 +884,16 @@ if mode == "Workflow Mode":
 # =========================
 else:
     st.subheader("🛠️ ReAct Agent Mode")
-    st.caption("这个模式会让模型根据你的问题自主选择 RAG / Planner / Tutor / Quiz / Grading / QA / Reviewer / Long-term Memory 等工具，并在最终回答后进行 Reflection 自检改写。")
+    st.caption("这个模式现在通过 FastAPI /react/chat 调用后端 ReAct Agent，并使用 Redis 按 session_id 保存短期会话记忆。")
 
     # 读取最近一次 Workflow 结果；没有运行过 Workflow 时为空字典
     latest_result = st.session_state.latest_result or {}
 
-    # ReAct Agent 可独立运行；如果有 Workflow 上下文，则回答更贴合当前学习内容
+    # API 版 ReAct 使用 Redis 作为跨请求短期记忆；Workflow 本地 State 暂不直接传给后端。
     if latest_result:
-        st.success("已检测到 Workflow Mode 生成过的学习上下文，ReAct Agent 可以读取并调用相关工具。")
+        st.success("已检测到本地 Workflow 结果。当前 API 版 ReAct 主要读取 Redis 短期记忆和后端工具上下文，后续可扩展为把 Workflow 上下文一起传给 /react/chat。")
     else:
-        st.info("当前还没有 Workflow Mode 生成的学习上下文。ReAct Agent 仍可独立调用 Planner / Tutor / RAG / Quiz / QA / Reviewer / Long-term Memory 等工具，建议先运行 Workflow，回答会更贴合本轮学习内容。")
+        st.info("当前还没有 Workflow Mode 生成的学习上下文。API 版 ReAct 仍可独立调用 Planner / Tutor / RAG / Quiz / QA / Reviewer / Long-term Memory 等工具。")
 
     st.markdown("### 可用工具")
     st.markdown(
@@ -821,6 +956,11 @@ else:
                             st.markdown(f"**工具返回：`{step.get('name', '')}`**")
                             st.code(step.get("content", ""), language="text")
 
+            # 展示本轮 Redis 短期记忆写入结果
+            if item.get("redis_memory"):
+                with st.expander("查看本轮 Redis 短期记忆写入结果"):
+                    st.write(item.get("redis_memory"))
+
             # 展示 ReAct 交互后的长期记忆写入结果
             if item.get("memory_result"):
                 with st.expander("查看本轮长期记忆写入结果"):
@@ -843,58 +983,33 @@ else:
             matched_skill_names = _skill_display_names(react_question)
             matched_skill_internal_names = _skill_internal_names(react_question)
 
-            # 构建 ReAct Agent 上下文：
-            # 有 Workflow 结果时复用；没有时让 tools 自己补齐 Plan / Tutor / RAG 等内容
-            current_context = {
+            payload = {
+                "session_id": st.session_state.thread_id,
+                "question": react_question,
                 "goal": goal,
                 "level": level,
-                "hours": hours,
-                "learning_plan": latest_result.get("learning_plan", ""),
-                "tutor_explanation": latest_result.get("tutor_explanation", ""),
-                "quiz": latest_result.get("quiz", ""),
-                "review": latest_result.get("review", ""),
-                "retrieved_context": latest_result.get("retrieved_context", ""),
-                "workflow_reflection": latest_result.get("workflow_reflection", ""),
-                "final_answer": latest_result.get("final_answer", ""),
-                "long_term_memory": latest_result.get("long_term_memory", ""),
-                "qa_history": st.session_state.qa_history,
-                "react_agent_history": st.session_state.react_agent_history,
+                "hours": int(hours),
+                "enable_reflection": bool(enable_reflection),
                 "rag_top_k": int(rag_top_k),
                 "rag_fetch_k": int(rag_fetch_k),
                 "retrieval_mode": retrieval_mode,
-                "matched_skills": matched_skill_internal_names,
+                "max_memory_rounds": int(max_memory_rounds),
             }
 
-            with st.spinner("ReAct Agent 正在判断是否需要调用工具，并生成回答..."):
+            with st.spinner("ReAct Agent 正在通过 FastAPI /react/chat 判断工具调用并生成回答..."):
                 try:
-                    # 调用 ReAct Agent，返回最终回答、草稿、Reflection 和工具调用轨迹
-                    react_result = run_react_agent(
-                        question=react_question,
-                        context=current_context,
-                        thread_id=st.session_state.thread_id,
-                        enable_reflection=enable_reflection,
+                    react_result = _call_api(
+                        "POST",
+                        "/react/chat",
+                        json=payload,
+                        timeout=240,
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
                     st.stop()
 
-            # ReAct 完成后，尝试把本轮交互沉淀为长期记忆。
-            # 失败不影响 ReAct 主回答。
-            try:
-                react_memory_result = record_react_memory(
-                    goal=goal,
-                    level=level,
-                    question=react_question,
-                    answer=react_result.get("final_answer", ""),
-                )
-            except Exception as exc:
-                react_memory_result = {
-                    "saved": False,
-                    "action": "error",
-                    "reason": str(exc),
-                }
-
-            # 保存本轮 ReAct 对话，供页面展示和后续上下文使用
+            # 保存本轮 ReAct 对话到 Streamlit 本地展示历史。
+            # 真正的跨请求短期记忆由 FastAPI 写入 Redis。
             st.session_state.react_agent_history.append(
                 {
                     "question": react_question,
@@ -904,8 +1019,9 @@ else:
                     "used_reflection": react_result.get("used_reflection", False),
                     "trace": react_result.get("trace", []),
                     "matched_skill_names": matched_skill_names,
-                    "matched_skills": matched_skill_internal_names,
-                    "memory_result": react_memory_result,
+                    "matched_skills": react_result.get("matched_skills", matched_skill_internal_names),
+                    "redis_memory": react_result.get("redis_memory", {}),
+                    "memory_result": react_result.get("long_term_memory_result", {}),
                 }
             )
 

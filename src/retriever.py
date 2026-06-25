@@ -124,16 +124,24 @@ def split_documents():
     return chunks
 
 
+@lru_cache(maxsize=1)
 def get_embedding_model():
     """
-    获取嵌入模型
+    获取嵌入模型。
+
+    FastAPI 服务启动后，一个进程内只加载一次 embedding 模型，
+    避免每次 RAG / 长期记忆检索都重复 Loading weights。
     """
 
+    print("[embedding] loading HuggingFaceEmbeddings ...", flush=True)
+
     model = HuggingFaceEmbeddings(
-        model_name='sentence-transformers/all-MiniLM-L6-v2',
-        model_kwargs = {"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True}            # 归一化向量，检索时只关注方向不关注大小
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
     )
+
+    print("[embedding] loaded.", flush=True)
 
     return model
 
