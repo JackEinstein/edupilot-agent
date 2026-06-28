@@ -1,6 +1,9 @@
+import re
+
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.llm import get_llm
+from src.prompts import render_prompt
 
 
 # =========================
@@ -35,6 +38,51 @@ def _format_trace(trace: list[dict]) -> str:
     return "\n".join(formatted_trace)
 
 
+def _split_reflection_output(text: str) -> tuple[str, str]:
+    """
+    Split a Reflection response into review notes and improved output.
+
+    Some LLM responses may miss the requested markdown separator. In that case,
+    keep the raw response as the usable output instead of failing the workflow.
+    """
+
+    text = text or ""
+
+    if "## Improved Output" in text:
+        reflection, improved = text.split("## Improved Output", maxsplit=1)
+        reflection = reflection.replace("## Reflection", "").strip()
+        return reflection, improved.strip()
+
+    return (
+        "模型未按指定格式输出，已使用原始输出作为改写结果。",
+        text.strip(),
+    )
+
+
+def _should_improve(reflection: str) -> bool:
+    """
+    根据 Reflection 文本判断是否真的需要进入改写阶段。
+
+    如果模型明确说“不需要改写”，或者评分较高，就直接保留 draft_answer，
+    避免二次改写导致答案变短、信息丢失。
+    """
+
+    text = reflection or ""
+
+    # 明确写了“不需要改写”
+    if re.search(r"是否需要改写[\s\S]{0,100}不需要改写", text):
+        return False
+
+    # 如果能解析到评分，且评分 >= 85，也认为无需改写
+    score_match = re.search(r"(\d{1,3})\s*分", text)
+    if score_match:
+        score = int(score_match.group(1))
+        if score >= 85:
+            return False
+
+    return True
+
+
 def reflect_answer(context: dict, question: str, draft_answer: str, trace: list[dict]) -> str:
     """
     Reflect on the ReAct Agent draft answer and identify improvement points.
@@ -54,57 +102,22 @@ def reflect_answer(context: dict, question: str, draft_answer: str, trace: list[
     trace_text = _format_trace(trace)
 
     system_message = SystemMessage(
-        content=(
-            "你是 EduPilot Agent 的 Reflection Reviewer。"
-            "你的任务不是重新回答学生问题，而是严格审查 Agent 的草稿回答，"
-            "找出是否存在遗漏、空泛、没有结合工具结果、没有结合学生水平、"
-            "或者可能编造的问题。"
-        )
+        content=render_prompt("react_reflection_system")
     )
 
     human_message = HumanMessage(
-        content=f"""
-        【学生问题】
-        {question}
-        
-        【学习目标】
-        {goal}
-        
-        【学生当前水平】
-        {level}
-        
-        【可用学习时间】
-        {hours}
-        
-        【已有学习计划】
-        {learning_plan}
-        
-        【已有导师讲解】
-        {tutor_explanation}
-        
-        【RAG 检索资料】
-        {retrieved_context}
-        
-        【本轮 React Agent 调用工具轨迹】
-        {trace_text}
-        
-        【Agent 草稿回答】
-        {draft_answer}
-        
-        请对草稿回答做 Reflection 审查，必须按下面格式输出：
-
-        ## Reflection 评分
-        给出 0-100 分，并说明扣分原因。
-
-        ## 主要问题
-        用 3-5 条指出草稿回答的具体问题。如果草稿回答已经较好，也要指出可继续优化的地方。
-
-        ## 改写建议
-        给出下一版回答应该如何改进，要求具体、可执行。
-
-        ## 是否需要改写
-        只能回答：需要改写 / 不需要改写。
-        """
+        content=render_prompt(
+            "react_reflection_human",
+            question=question,
+            goal=goal,
+            level=level,
+            hours=hours,
+            learning_plan=learning_plan,
+            tutor_explanation=tutor_explanation,
+            retrieved_context=retrieved_context,
+            trace_text=trace_text,
+            draft_answer=draft_answer,
+        )
     )
 
     messages = [system_message, human_message]
@@ -125,42 +138,19 @@ def improve_answer(context: dict, question: str, draft_answer: str, reflection: 
     hours = context.get("hours") or 4
 
     system_message = SystemMessage(
-        content=(
-            "你是 EduPilot Agent 的最终回答改写器。"
-            "你需要根据 Reflection 审查意见改写答案。"
-            "最终输出只给学生看的正式回答，不要输出审查过程，"
-            "不要暴露模型的私密推理过程。"
-        )
+        content=render_prompt("react_improve_system")
     )
 
     human_message = HumanMessage(
-        content=f"""
-        【学生问题】
-        {question}
-
-        【学生学习目标】
-        {goal}
-
-        【学生当前水平】
-        {level}
-
-        【今日可用时间】
-        {hours}
-
-        【Agent 草稿回答】
-        {draft_answer}
-
-        【Reflection 审查意见】
-        {reflection}
-
-        请输出改写后的最终答案。要求：
-        1. 用中文回答；
-        2. 像老师带学生做项目一样具体、清楚、可执行；
-        3. 保留草稿中正确、有用的内容；
-        4. 修正 Reflection 指出的问题；
-        5. 不要说“根据 Reflection”；
-        6. 不要输出草稿、评分或审查过程。
-        """
+        content=render_prompt(
+            "react_improve_human",
+            question=question,
+            goal=goal,
+            level=level,
+            hours=hours,
+            draft_answer=draft_answer,
+            reflection=reflection,
+        )
     )
 
     messages = [system_message, human_message]
@@ -188,6 +178,14 @@ def run_reflection_loop(context: dict, question: str, draft_answer: str, trace: 
         draft_answer=draft_answer,
         trace=trace,
     )
+
+    if not _should_improve(reflection):
+        return {
+            'draft_answer': draft_answer,
+            'final_answer': draft_answer,
+            'reflection': reflection,
+            'used_reflection': True,
+        }
 
     final_answer = improve_answer(
         context=context,
@@ -276,53 +274,24 @@ def reflect_node_output(stage: str, context: dict, draft_output: str, enable_ref
     stage_rule = LIGHT_STAGE_RULES.get(stage, '请检查该节点输出是否清晰、准确、具体、可执行。')
 
     system_message = SystemMessage(
-        content=(
-            "你是 EduPilot Workflow 的轻量级节点审查器。"
-            "你的任务是检查某个节点的草稿输出，并在不改变节点职责的前提下改写它。"
-            "你不是在生成完整学习方案，只负责当前节点的局部质量控制。"
-        )
+        content=render_prompt("workflow_node_reflection_system")
     )
 
     human_message = HumanMessage(
-        content=f"""
-        当前节点：
-        {stage}
-
-        审查标准：
-        {stage_rule}
-
-        最小必要上下文：
-        {_format_context(context)}
-
-        当前节点草稿：
-        {draft_output}
-
-        请严格按照下面格式输出，不要增加其他一级标题：
-        
-        ## Reflection
-        - 主要问题：用 1-3 条指出草稿可改进处；如果已经较好，也指出可以更贴合项目或更精炼的地方。
-        - 改写原则：说明你将如何小幅改写。
-        
-        ## Improved Output
-        这里输出改写后的正式节点内容。
-        
-        要求：
-        1. 只输出当前节点应该交给后续节点使用的内容；
-        2. 不要在 Improved Output 里提到 Reflection、评分、自检过程；
-        3. 尽量保留草稿中的正确内容；
-        4. 只做必要修正，不要大幅扩写；
-        5. 不要引入上下文之外的新事实；
-        6. 输出中文 Markdown。
-        """
+        content=render_prompt(
+            "workflow_node_reflection_human",
+            stage=stage,
+            stage_rule=stage_rule,
+            context_text=_format_context(context),
+            draft_output=draft_output,
+        )
     )
 
     messages = [system_message, human_message]
 
     response = llm.invoke(messages)
 
-    reflection, improved_output = response.content.split('## Improved Output', maxsplit=1)
-    reflection = reflection.replace('## Reflection', '').strip()
-    improved_output = improved_output.strip()
+    reflection, improved_output = _split_reflection_output(response.content)
 
     return {
         'improved_output': improved_output,
@@ -350,47 +319,22 @@ def reflect_workflow_output(context: dict, draft_answer: str, enable_reflection:
     llm = get_llm()
 
     system_message = SystemMessage(
-        content=(
-            "你是 EduPilot Workflow 的全局审查器。"
-            "你的任务是检查完整学习闭环是否一致、具体、适合学生水平，"
-            "然后生成最终展示给学生的版本。"
-        )
+        content=render_prompt("workflow_global_reflection_system")
     )
 
     human_message = HumanMessage(
-        content=f"""
-        最小必要上下文：
-        {_format_context(context)}
-    
-        Workflow 草稿总输出：
-        {draft_answer}
-    
-        请严格按照下面格式输出，不要增加其他一级标题：
-    
-        ## Reflection
-        - 一致性问题：检查计划、讲解、小测、复盘是否前后一致；
-        - 可执行性问题：检查是否有明确任务、产出和验收标准；
-        - 改写原则：说明你将如何小幅改写最终版本。
-    
-        ## Improved Output
-        这里输出最终给学生看的完整学习方案。
-    
-        要求：
-        1. 保留原来的学习计划、导师讲解、小测验、复盘四个部分；
-        2. 修正明显重复、脱节、空泛的地方；
-        3. 不要大幅扩写；
-        4. 不要编造新资料；
-        5. 输出中文 Markdown。
-        """
+        content=render_prompt(
+            "workflow_global_reflection_human",
+            context_text=_format_context(context),
+            draft_answer=draft_answer,
+        )
     )
 
     messages = [system_message, human_message]
 
     response = llm.invoke(messages)
 
-    reflection, final_answer = response.content.split('## Improved Output', maxsplit=1)
-    reflection = reflection.replace('## Reflection', '').strip()
-    final_answer = final_answer.strip()
+    reflection, final_answer = _split_reflection_output(response.content)
 
     return {
         'final_answer': final_answer,

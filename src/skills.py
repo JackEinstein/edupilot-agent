@@ -28,7 +28,7 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         description="根据学习目标、历史记录、长期记忆和 RAG 资料生成学习计划。",
         trigger_keywords=["计划", "学习路线", "怎么学", "安排", "目标", "planner"],
         prompt_name="planner",
-        related_tools=["plan_learning"],
+        related_tools=["plan_tool"],
         demo_query="我想学习 LangGraph 的短期记忆机制，帮我安排今天的学习计划。",
     ),
 
@@ -36,9 +36,13 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         name="rag_tutor",
         display_name="RAG 导师讲解 Skill",
         description="基于本地知识库检索结果进行导师式讲解。",
-        trigger_keywords=["讲解", "解释", "原理", "是什么", "为什么", "tutor", "RAG"],
+        trigger_keywords=[
+            "讲解", "解释", "不懂", "区别", "概念",
+            "Prompt", "prompt", "提示词", "Prompt Engineering",
+            "结构化提示", "思维链", "Few-Shot", "Tutor"
+        ],
         prompt_name="tutor",
-        related_tools=["rag_search", "tutor_explain"],
+        related_tools=["rag_tool", "tutor_tool"],
         demo_query="请结合知识库资料讲解一下 LangGraph 的 StateGraph。",
     ),
 
@@ -48,7 +52,7 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         description="根据学习内容自动生成选择题和简答题。",
         trigger_keywords=["测验", "小测", "题目", "出题", "quiz"],
         prompt_name="quiz",
-        related_tools=["generate_quiz"],
+        related_tools=["quiz_tool"],
         demo_query="根据刚才的导师讲解，帮我生成一组小测验。",
     ),
 
@@ -58,7 +62,7 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         description="根据学生答案、测验题和学习资料进行逐题批改。",
         trigger_keywords=["批改", "评分", "答案", "哪里错", "grade"],
         prompt_name="grade",
-        related_tools=["grade_quiz"],
+        related_tools=["grade_quiz_answer_tool"],
         demo_query="这是我的答案：1A 2C，简答题我认为 RAG 是先检索再生成，请帮我批改。",
     ),
 
@@ -68,7 +72,7 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         description="基于当前学习上下文继续回答学生追问。",
         trigger_keywords=["追问", "不懂", "为什么", "能不能再解释", "qa", "问题"],
         prompt_name="qa",
-        related_tools=["answer_followup_question"],
+        related_tools=["qa_tool"],
         demo_query="我还是不懂 thread_id 为什么能实现短期记忆。",
     ),
 
@@ -78,7 +82,7 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         description="对各模块输出进行自检、纠错和结构优化。",
         trigger_keywords=["反思", "检查", "优化回答", "自检", "reflection"],
         prompt_name="reflection",
-        related_tools=["reflect_answer"],
+        related_tools=[],
         demo_query="请检查刚才的导师讲解有没有遗漏关键点。",
     ),
 
@@ -86,9 +90,12 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         name="memory_personalization",
         display_name="长期记忆个性化 Skill",
         description="召回和写入用户长期学习画像，用于个性化计划和讲解。",
-        trigger_keywords=["记忆", "长期记忆", "我的偏好", "上次", "memory"],
+        trigger_keywords=[
+            "记忆", "memory", "长期记忆", "短期记忆",
+            "记得", "刚才", "之前", "学习进度", "今天在做"
+        ],
         prompt_name="planner",
-        related_tools=["retrieve_long_term_memory", "save_long_term_memory"],
+        related_tools=["long_term_memory_tool"],
         demo_query="你还记得我之前学习 RAG 时哪里最容易卡住吗？",
     ),
 
@@ -98,7 +105,7 @@ SKILL_REGISTRY: Dict[str, SkillSpec] = {
         description="展示 rough、light_rerank、model_rerank 三种检索模式的召回与排序结果。",
         trigger_keywords=["检索", "召回", "rerank", "排序", "debug", "调试"],
         prompt_name="tutor",
-        related_tools=["rag_search"],
+        related_tools=["rag_tool"],
         demo_query="用三种 RAG 检索模式对 LangGraph memory 做一次对比。",
     ),
 }
@@ -146,21 +153,77 @@ def detect_skills(user_input: str) -> list[SkillSpec]:
     return [SKILL_REGISTRY["learning_planner"]]
 
 
+def analyze_skill_route(user_input: str) -> dict:
+    """
+    Return explainable Skill routing details for ReAct prompt and API debug.
+    """
+
+    text = (user_input or "").lower()
+    matched = []
+    reasons = []
+
+    for skill in SKILL_REGISTRY.values():
+        hit_keywords = [
+            keyword for keyword in skill.trigger_keywords
+            if keyword.lower() in text
+        ]
+
+        if hit_keywords:
+            matched.append(skill)
+            reasons.append(
+                f"{skill.name} 命中关键词：{', '.join(hit_keywords[:3])}"
+            )
+
+    if not matched:
+        if len(text) <= 20:
+            matched = [SKILL_REGISTRY["rag_tutor"]]
+            reasons.append("未命中明确关键词，短问题默认进入 RAG 导师讲解 Skill。")
+        else:
+            matched = [SKILL_REGISTRY["learning_planner"]]
+            reasons.append("未命中明确关键词，长问题默认进入学习规划 Skill。")
+
+    recommended_tools = []
+    for skill in matched:
+        for tool_name in skill.related_tools:
+            if tool_name not in recommended_tools:
+                recommended_tools.append(tool_name)
+
+    return {
+        "matched_skills": [skill.name for skill in matched],
+        "matched_skill_display_names": [skill.display_name for skill in matched],
+        "recommended_tools": recommended_tools,
+        "routing_reason": "；".join(reasons),
+        "skill_cards": [
+            {
+                "name": skill.name,
+                "display_name": skill.display_name,
+                "description": skill.description,
+                "prompt_name": skill.prompt_name,
+                "related_tools": skill.related_tools,
+            }
+            for skill in matched
+        ],
+    }
+
+
 def format_skills_for_agent(user_input: str = "") -> str:
     """
     给 ReAct system prompt 注入 Skill 描述。
     """
-    if user_input:
-        skills = detect_skills(user_input)
-    else:
-        skills = list(SKILL_REGISTRY.values())
+    if not user_input:
+        user_input = ""
 
+    route = analyze_skill_route(user_input)
     lines = []
-    for skill in skills:
+    lines.append(f"路由原因：{route['routing_reason']}")
+    lines.append(f"推荐优先考虑工具：{', '.join(route['recommended_tools']) or '暂无'}")
+    lines.append("")
+
+    for card in route["skill_cards"]:
         lines.append(
-            f"- {skill.display_name}：{skill.description}；"
-            f"关联 Prompt：{skill.prompt_name}；"
-            f"关联工具：{', '.join(skill.related_tools)}"
+            f"- {card['display_name']}：{card['description']}；"
+            f"关联 Prompt：{card['prompt_name']}；"
+            f"推荐工具：{', '.join(card['related_tools']) or '无'}"
         )
 
     return "\n".join(lines)

@@ -19,7 +19,7 @@ from src.redis_memory import (
 )
 from src.retriever import DEFAULT_RETRIEVAL_MODE
 from src.short_term_memory import format_react_agent_history
-from src.skills import detect_skills
+from src.skills import analyze_skill_route
 
 
 app = FastAPI(
@@ -134,6 +134,9 @@ class ReactChatResponse(BaseModel):
     used_reflection: bool = False
     trace: list[dict[str, Any]] = Field(default_factory=list)
     matched_skills: list[str] = Field(default_factory=list)
+    recommended_tools: list[str] = Field(default_factory=list)
+    routing_reason: str = ""
+    skill_route: dict[str, Any] = Field(default_factory=dict)
     redis_memory: dict[str, Any] = Field(default_factory=dict)
     long_term_memory_result: dict[str, Any] = Field(default_factory=dict)
 
@@ -280,7 +283,8 @@ def react_chat(payload: ReactChatRequest) -> ReactChatResponse:
         redis_history,
         max_rounds=payload.max_memory_rounds,
     )
-    matched_skills = [skill.name for skill in detect_skills(question)]
+    skill_route = analyze_skill_route(question)
+    matched_skills = skill_route["matched_skills"]
 
     context = {
         "goal": payload.goal,
@@ -348,6 +352,9 @@ def react_chat(payload: ReactChatRequest) -> ReactChatResponse:
         used_reflection=react_result.get("used_reflection", False),
         trace=trace,
         matched_skills=matched_skills,
+        recommended_tools=skill_route.get("recommended_tools", []),
+        routing_reason=skill_route.get("routing_reason", ""),
+        skill_route=skill_route,
         redis_memory=redis_memory_result,
         long_term_memory_result=long_term_memory_result,
     )

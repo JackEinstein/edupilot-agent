@@ -1,0 +1,10 @@
+{"case_id":"react_001","question":"我想学习 LangGraph 的短期记忆机制，帮我安排今天的学习计划。","expected_skills":["learning_planner"]}
+{"case_id":"react_002","question":"请结合知识库资料讲解一下 StateGraph 是怎么工作的。","expected_skills":["rag_tutor"]}
+{"case_id":"react_003","question":"我不懂 Redis 短期记忆和 LangGraph InMemorySaver 有什么区别。","expected_skills":["rag_tutor","followup_qa","memory_personalization"]}
+{"case_id":"react_004","question":"根据刚才的导师讲解，帮我生成一组小测验。","expected_skills":["quiz_generation"]}
+{"case_id":"react_005","question":"这是我的答案：RAG 是先检索资料再交给大模型生成回答，请帮我批改。","expected_skills":["quiz_grading"]}
+{"case_id":"react_006","question":"你还记得我之前学习 Reflection 的时候哪里容易卡住吗？","expected_skills":["memory_personalization"]}
+{"case_id":"react_007","question":"请对比 vector_only 和 lightweight rerank 两种检索模式。","expected_skills":["retrieval_debug"]}
+{"case_id":"react_008","question":"我还是不懂 system message 和 human message 为什么要分开。","expected_skills":["followup_qa","rag_tutor"]}
+{"case_id":"react_009","question":"帮我检查刚才的回答有没有太空泛、有没有遗漏关键点。","expected_skills":["reflection_review"]}
+{"case_id":"react_010","question":"今天 Day 13 我应该先做 Prompt 2.0 还是 Skill 2.0？","expected_skills":["learning_planner"]}

@@ -262,7 +262,7 @@ def reviewer_node(state: EduPilotState) -> EduPilotState:
     )
 
     review_reflection = reflect_node_output(
-        stage='review',
+        stage='reviewer',
         context=_build_light_reflection_context(
             state=state,
             stage='reviewer',

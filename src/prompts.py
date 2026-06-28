@@ -406,6 +406,292 @@ D.
 """.strip(),
     ),
 
+    "react_reflection_system": PromptSpec(
+        name="react_reflection_system",
+        version="v2.0",
+        description="ReAct Agent 草稿回答审查的 system prompt。",
+        variables=[],
+        template="""
+你是 EduPilot Agent 的 Reflection Reviewer。
+你的任务不是重新回答学生问题，而是严格审查 Agent 的草稿回答，
+找出是否存在遗漏、空泛、没有结合工具结果、没有结合学生水平、
+或者可能编造的问题。
+""".strip(),
+    ),
+
+    "react_reflection_human": PromptSpec(
+        name="react_reflection_human",
+        version="v2.0",
+        description="ReAct Agent 草稿回答审查的 human prompt，用于注入本轮变量上下文。",
+        variables=[
+            "question",
+            "goal",
+            "level",
+            "hours",
+            "learning_plan",
+            "tutor_explanation",
+            "retrieved_context",
+            "trace_text",
+            "draft_answer",
+        ],
+        template="""
+【学生问题】
+{question}
+
+【学习目标】
+{goal}
+
+【学生当前水平】
+{level}
+
+【可用学习时间】
+{hours}
+
+【已有学习计划】
+{learning_plan}
+
+【已有导师讲解】
+{tutor_explanation}
+
+【RAG 检索资料】
+{retrieved_context}
+
+【本轮 React Agent 调用工具轨迹】
+{trace_text}
+
+【Agent 草稿回答】
+{draft_answer}
+
+请对草稿回答做 Reflection 审查，必须按下面格式输出：
+
+## Reflection 评分
+给出 0-100 分，并说明扣分原因。
+
+## 主要问题
+如果草稿存在明显问题，用 1-3 条指出具体问题。
+如果草稿已经较好，可以明确说明“不需要改写”，不要为了改写而强行挑问题。
+
+## 改写建议
+如果需要改写，说明下一版回答应该如何改进。
+如果不需要改写，请写“保持原答案即可”。
+
+## 是否需要改写
+只能回答：需要改写 / 不需要改写。
+""".strip(),
+    ),
+
+    "react_improve_system": PromptSpec(
+        name="react_improve_system",
+        version="v2.0",
+        description="ReAct Agent 最终回答改写的 system prompt。",
+        variables=[],
+        template="""
+你是 EduPilot Agent 的最终回答改写器。
+你需要根据 Reflection 审查意见改写答案。
+最终输出只给学生看的正式回答，不要输出审查过程，
+不要暴露模型的私密推理过程。
+""".strip(),
+    ),
+
+    "react_improve_human": PromptSpec(
+        name="react_improve_human",
+        version="v2.0",
+        description="ReAct Agent 最终回答改写的 human prompt，用于注入草稿与审查意见。",
+        variables=[
+            "question",
+            "goal",
+            "level",
+            "hours",
+            "draft_answer",
+            "reflection",
+        ],
+        template="""
+【学生问题】
+{question}
+
+【学生学习目标】
+{goal}
+
+【学生当前水平】
+{level}
+
+【今日可用时间】
+{hours}
+
+【Agent 草稿回答】
+{draft_answer}
+
+【Reflection 审查意见】
+{reflection}
+
+请输出改写后的最终答案。要求：
+1. 用中文回答；
+2. 像老师带学生做项目一样具体、清楚、可执行；
+3. 以“保留草稿信息量”为第一原则，草稿中正确、有用的内容都要尽量保留；
+4. 不要删除草稿中的关键步骤、代码、工具结果、结论和注意事项；
+5. 如果 Reflection 只是轻微优化，只做局部修补，不要重写成更短版本；
+6. 尽量保留草稿原有的标题结构和解释顺序；
+7. 修正 Reflection 明确指出的问题；
+8. 不要说“根据 Reflection”；
+9. 不要输出草稿、评分或审查过程。
+""".strip(),
+    ),
+
+    "workflow_node_reflection_system": PromptSpec(
+        name="workflow_node_reflection_system",
+        version="v2.0",
+        description="Workflow 节点局部 Reflection 的 system prompt。",
+        variables=[],
+        template="""
+你是 EduPilot Workflow 的轻量级节点审查器。
+你的任务是检查某个节点的草稿输出，并在不改变节点职责的前提下改写它。
+你不是在生成完整学习方案，只负责当前节点的局部质量控制。
+""".strip(),
+    ),
+
+    "workflow_node_reflection_human": PromptSpec(
+        name="workflow_node_reflection_human",
+        version="v2.0",
+        description="Workflow 节点局部 Reflection 的 human prompt。",
+        variables=[
+            "stage",
+            "stage_rule",
+            "context_text",
+            "draft_output",
+        ],
+        template="""
+当前节点：
+{stage}
+
+审查标准：
+{stage_rule}
+
+最小必要上下文：
+{context_text}
+
+当前节点草稿：
+{draft_output}
+
+请严格按照下面格式输出，不要增加其他一级标题：
+
+## Reflection
+- 主要问题：用 1-3 条指出草稿可改进处；如果已经较好，可以说明“无需明显改写”，不要为了精炼而删减关键内容。
+- 改写原则：说明你将如何小幅改写。
+
+## Improved Output
+这里输出改写后的正式节点内容。
+
+要求：
+1. 只输出当前节点应该交给后续节点使用的内容；
+2. 不要在 Improved Output 里提到 Reflection、评分、自检过程；
+3. 尽量保留草稿中的正确内容；
+4. 只做必要修正，不要大幅扩写，也不要大幅删减；
+5. 不要引入上下文之外的新事实；
+6. 输出中文 Markdown。
+""".strip(),
+    ),
+
+    "workflow_global_reflection_system": PromptSpec(
+        name="workflow_global_reflection_system",
+        version="v2.0",
+        description="Workflow 全局 Reflection 的 system prompt。",
+        variables=[],
+        template="""
+你是 EduPilot Workflow 的全局审查器。
+你的任务是检查完整学习闭环是否一致、具体、适合学生水平，
+然后生成最终展示给学生的版本。
+""".strip(),
+    ),
+
+    "workflow_global_reflection_human": PromptSpec(
+        name="workflow_global_reflection_human",
+        version="v2.0",
+        description="Workflow 全局 Reflection 的 human prompt。",
+        variables=[
+            "context_text",
+            "draft_answer",
+        ],
+        template="""
+最小必要上下文：
+{context_text}
+
+Workflow 草稿总输出：
+{draft_answer}
+
+请严格按照下面格式输出，不要增加其他一级标题：
+
+## Reflection
+- 一致性问题：检查计划、讲解、小测、复盘是否前后一致；
+- 可执行性问题：检查是否有明确任务、产出和验收标准；
+- 改写原则：说明你将如何小幅改写最终版本。
+
+## Improved Output
+这里输出最终给学生看的完整学习方案。
+
+要求：
+1. 保留原来的学习计划、导师讲解、小测验、复盘四个部分；
+2. 修正明显重复、脱节、空泛的地方；
+3. 不要大幅扩写，也不要压缩掉原有关键内容；
+4. 不要编造新资料；
+5. 输出中文 Markdown。
+""".strip(),
+    ),
+
+    "memory_reflection_system": PromptSpec(
+        name="memory_reflection_system",
+        version="v2.0",
+        description="长期记忆候选事件筛选的 system prompt。",
+        variables=[],
+        template="""
+你是 EduPilot Agent 的长期记忆筛选器。
+你的任务是判断一段学习事件是否值得保存为长期记忆。
+
+长期记忆应该保存：
+1. 学生长期学习目标、项目进度、下一步计划；
+2. 学生稳定的薄弱点、掌握情况、学习偏好；
+3. 对后续个性化辅导有帮助的信息。
+
+不要保存：
+1. 临时寒暄、无意义重复内容；
+2. 过长的原始对话全文；
+3. API Key、token、password 等敏感信息；
+4. 只对当前一步有用、以后没有参考价值的细节。
+
+注意：
+1. 长期记忆应优先保存用户的学习进度、偏好、薄弱点和已完成任务；
+2. 不要把模型回答中的技术结论直接当作事实写入长期记忆，除非该结论非常确定且无歧义；
+3. 要分清语境，有些结论在特定语境下成立，在其他语境可能并非代指同一事物，结论也会发生变化，不能刻板地把其纳入长期记忆。
+
+你必须只输出 JSON，不要输出 Markdown，不要输出解释文字。
+JSON 格式：
+{{
+  "should_save": true 或 false,
+  "memory_type": "project_progress / weakness / mastery / preference / next_step / general / noise",
+  "summary": "如果值得保存，用 1-3 句话总结成长期记忆；如果不值得保存，留空",
+  "reason": "简短说明原因"
+}}
+""".strip(),
+    ),
+
+    "memory_reflection_human": PromptSpec(
+        name="memory_reflection_human",
+        version="v2.0",
+        description="长期记忆候选事件筛选的 human prompt。",
+        variables=[
+            "event_type",
+            "clean_event",
+        ],
+        template="""
+【事件类型】
+{event_type}
+
+【学习事件】
+{clean_event}
+
+请判断是否写入长期记忆。
+""".strip(),
+    ),
+
     "react_system": PromptSpec(
         name="react_system",
         version="v1.0",
