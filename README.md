@@ -62,43 +62,6 @@ EduPilot Agent 当前采用“双模式 Agent 架构”：
 2. **ReAct Tool Calling 模式**
    用于灵活问答和工具调用，适合开放式追问、调试、记忆召回和组合工具执行。
 
-整体架构如下：
-
-```mermaid
-flowchart TD
-    U[User] --> UI[Streamlit Frontend]
-    UI --> API[FastAPI Backend]
-
-    API --> WF[LangGraph Workflow Mode]
-    API --> RA[ReAct Tool Calling Mode]
-
-    WF --> R1[Retriever Node]
-    WF --> P1[Planner Node]
-    WF --> T1[Tutor Node]
-    WF --> Q1[Quiz Node]
-    WF --> V1[Reviewer Node]
-    WF --> RF1[Workflow Reflection]
-
-    RA --> LLM[LLM ReAct Loop]
-    LLM --> Tools[Tool Set]
-    Tools --> RagTool[RAG Tool]
-    Tools --> PlanTool[Plan Tool]
-    Tools --> TutorTool[Tutor Tool]
-    Tools --> QuizTool[Quiz Tool]
-    Tools --> GradeTool[Grade Tool]
-    Tools --> QATool[QA Tool]
-    Tools --> MemoryTool[Long-term Memory Tool]
-
-    API --> Redis[(Redis Short-term Memory)]
-    WF --> VectorDB[(Chroma Vector Store)]
-    RA --> VectorDB
-    RA --> LongMemory[(Long-term Vector Memory)]
-
-    Prompt[Prompt Registry] --> WF
-    Prompt --> RA
-    Skill[Skill Registry] --> RA
-```
-
 ---
 
 ## 4. 双 Agent 模式设计
